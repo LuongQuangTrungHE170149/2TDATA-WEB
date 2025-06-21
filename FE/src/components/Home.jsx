@@ -21,8 +21,35 @@ import image16 from "../image/image16.jpg";
 import image17 from "../image/image17.png";
 import Header from "./Header";
 import Footer from "./Footer";
+import { useMutation } from "@tanstack/react-query";
+import instance from "../utils/axiosInstance";
+import { toast } from "react-toastify";
+
 const Home = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    phoneNumber: ""
+  });
+
+  const addUserInfoMutation = useMutation({
+    mutationFn: async (data) => {
+      const response = await instance.post('/userInfo/add', data);
+      return response.data;
+    },
+    onSuccess: () => {
+      toast.success("Thông tin đã được gửi thành công!");
+      setFormData({
+        name: "",
+        email: "",
+        phoneNumber: ""
+      });
+    },
+    onError: (error) => {
+      toast.error("Có lỗi xảy ra: " + (error.response?.data?.message || error.message));
+    }
+  });
 
   useEffect(() => {
     const checkAuth = () => {
@@ -31,6 +58,39 @@ const Home = () => {
     };
     checkAuth();
   }, []);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+
+    const { name, email, phoneNumber } = formData;
+
+    // Validate name
+    if (!name.trim()) {
+      toast.error("Vui lòng nhập họ tên.");
+      return;
+    }
+
+    if (name.length < 2) {
+      toast.error("Họ tên phải có ít nhất 2 ký tự.");
+      return;
+    }
+
+    // Validate email format
+    const emailRegex = /^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$/;
+    if (!emailRegex.test(email)) {
+      toast.error("Địa chỉ email không hợp lệ. Vui lòng nhập email đúng định dạng (ví dụ: example@domain.com)");
+      return;
+    }
+
+    // Validate phone number format
+    const phoneRegex = /^\d{10,11}$/;
+    if (!phoneRegex.test(phoneNumber)) {
+      toast.error("Số điện thoại không hợp lệ. Vui lòng nhập 10 hoặc 11 chữ số.");
+      return;
+    }
+
+    addUserInfoMutation.mutate(formData);
+  };
 
   return (
     <div>
@@ -596,24 +656,40 @@ const Home = () => {
                 Nhanh tay để nhận được ưu đãi nhất!
               </p>
               
-              <form className="space-y-3 md:space-y-4">
+
+              <form className="space-y-3 md:space-y-4" onSubmit={handleSubmit}>
                 <input
                   type="text"
                   placeholder="Họ và tên"
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+
                   className="w-full p-2 md:p-3 rounded-lg border border-gray-300 focus:outline-none focus:border-blue-500 text-sm md:text-base"
                 />
                 <input
                   type="email"
                   placeholder="Nhập Email"
+
+                  value={formData.email}
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+
                   className="w-full p-2 md:p-3 rounded-lg border border-gray-300 focus:outline-none focus:border-blue-500 text-sm md:text-base"
                 />
                 <input
                   type="tel"
                   placeholder="Nhập Số điện thoại"
+
+                  value={formData.phoneNumber}
+                  onChange={(e) => setFormData({...formData, phoneNumber: e.target.value})}
                   className="w-full p-2 md:p-3 rounded-lg border border-gray-300 focus:outline-none focus:border-blue-500 text-sm md:text-base"
                 />
-                <button className="w-full bg-red-600 text-white py-2 md:py-3 rounded-lg font-bold hover:bg-red-700 transition-colors text-sm md:text-base">
-                  GỬI ĐĂNG KÝ NGAY!
+                <button 
+                  type="submit"
+                  disabled={addUserInfoMutation.isPending}
+                  className="w-full bg-red-600 text-white py-2 md:py-3 rounded-lg font-bold hover:bg-red-700 transition-colors text-sm md:text-base disabled:bg-red-400"
+                >
+                  {addUserInfoMutation.isPending ? "Đang gửi..." : "GỬI ĐĂNG KÝ NGAY!"}
+
                 </button>
               </form>
             </div>

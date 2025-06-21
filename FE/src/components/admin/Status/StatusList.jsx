@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useQueryClient, useMutation, useQuery } from "@tanstack/react-query";
-import { Space, Table, Button, Popconfirm, Tag, Modal, Input, Form, Descriptions, Avatar, Select } from "antd";
+import { Space, Table, Button, Popconfirm, Tag, Modal, Input, Form, Descriptions, Avatar, Select, Row, Col, Badge } from "antd";
 import { toast } from "react-toastify";
-import { CheckOutlined, CloseOutlined, PlusOutlined, DeleteOutlined, EditOutlined, LinkOutlined } from "@ant-design/icons";
+import { CheckOutlined, CloseOutlined, PlusOutlined, DeleteOutlined, EditOutlined, LinkOutlined, SearchOutlined } from "@ant-design/icons";
 import instance from "../../../utils/axiosInstance";
 
 const StatusList = () => {
@@ -12,6 +12,21 @@ const StatusList = () => {
   const [form] = Form.useForm();
   const [links, setLinks] = useState([{ url: '', title: '', type: 'authority', description: '' }]);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [debouncedSearchText, setDebouncedSearchText] = useState('');
+  const [pagination, setPagination] = useState({
+    current: 1,
+    pageSize: 10,
+  });
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchText(searchText);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchText]);
 
   useEffect(() => {
     if (isModalOpen && selectedService) {
@@ -34,9 +49,14 @@ const StatusList = () => {
   }, [isModalOpen, selectedService, form]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["PENDING_SERVICES"],
+    queryKey: ["PENDING_SERVICES", debouncedSearchText, statusFilter, pagination.current, pagination.pageSize],
     queryFn: async () => {
-      const { data } = await instance.get(`/requests/pending`);
+      const params = new URLSearchParams();
+      if (debouncedSearchText) params.append('search', debouncedSearchText);
+      if (statusFilter) params.append('status', statusFilter);
+      params.append('page', pagination.current);
+      params.append('limit', pagination.pageSize);
+      const { data } = await instance.get(`/requests/pending?${params.toString()}`);
       return data;
     },
   });
@@ -173,6 +193,18 @@ const StatusList = () => {
     form.setFieldsValue({ [`${field}${index}`]: value });
   };
 
+  const handleSearch = (value) => {
+    setSearchText(value);
+  };
+
+  const handleStatusChange = (value) => {
+    setStatusFilter(value);
+  };
+
+  const handleTableChange = (newPagination) => {
+    setPagination(newPagination);
+  };
+
   const columns = [
     {
       title: "STT",
@@ -193,8 +225,8 @@ const StatusList = () => {
       key: "user",
       render: (user) => (
         <div>
-          <div className="font-medium">{user.name}</div>
-          <div className="text-sm text-gray-500">{user.email}</div>
+          <div className="font-medium">{user?.name || 'N/A'}</div>
+          <div className="text-sm text-gray-500">{user?.email || 'N/A'}</div>
         </div>
       ),
     },
@@ -202,19 +234,22 @@ const StatusList = () => {
       title: "Dịch vụ",
       dataIndex: "service",
       key: "service",
-      render: (service) => (
-        <div className="flex items-center gap-2">
-          <img
-            src={service.image || 'https://t4.ftcdn.net/jpg/04/73/25/49/360_F_473254957_bxG9yf4ly7OBO5I0O5KABlN930GwaMQz.jpg'}
-            alt={service.name}
-            className="w-10 h-10 object-cover rounded"
-          />
-          <div>
-            <div className="font-medium">{service.name}</div>
-            <div className="text-sm text-gray-500">{service.slug}</div>
+      render: (service) => {
+        console.log('Service object in render:', service);
+        return (
+          <div className="flex items-center gap-2">
+            <img
+              src={service?.image || 'https://t4.ftcdn.net/jpg/04/73/25/49/360_F_473254957_bxG9yf4ly7OBO5I0O5KABlN930GwaMQz.jpg'}
+              alt={service?.name || 'Service image'}
+              className="w-10 h-10 object-cover rounded"
+            />
+            <div>
+              <div className="font-medium">{service?.name || 'N/A'}</div>
+              <div className="text-sm text-gray-500">{service?.slug || 'N/A'}</div>
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       title: "Trạng thái",
@@ -290,6 +325,7 @@ const StatusList = () => {
               <Button 
                 icon={<DeleteOutlined />} 
                 danger
+                onClick={(e) => e.stopPropagation()}
               />
             </Popconfirm>
           )}
@@ -305,16 +341,46 @@ const StatusList = () => {
       <h2 className="ant-space css-dev-only-do-not-override-1uq9j6g ant-space-horizontal ant-space-align-center ant-space-gap-row-small ant-space-gap-col-small font-semibold text-lg rounded-md bg-[#E9E9E9] w-full p-4 my-8">
         Danh sách yêu cầu dịch vụ
       </h2>
+      
       <div className="">
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex gap-4">
+            <Input
+              placeholder="Tìm kiếm theo tên/email người dùng hoặc tên/slug dịch vụ"
+              prefix={<SearchOutlined />}
+              value={searchText}
+              onChange={(e) => handleSearch(e.target.value)}
+              className="w-96"
+              allowClear
+            />
+            <Select
+              placeholder="Lọc theo trạng thái"
+              allowClear
+              value={statusFilter}
+              onChange={handleStatusChange}
+              className="w-40"
+              options={[
+                { value: 'waiting', label: 'Đang chờ' },
+                { value: 'approved', label: 'Đã xác nhận' },
+                { value: 'rejected', label: 'Bị từ chối' }
+              ]}
+            />
+          </div>
+        </div>
+
         <Table
           columns={columns}
           dataSource={data?.data?.docs}
           rowKey="_id"
           loading={isLoading}
           pagination={{
-            pageSize: 10,
+            ...pagination,
+            total: data?.data?.totalDocs,
             showSizeChanger: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} mục`,
+            pageSizeOptions: ['10', '20', '50', '100'],
           }}
+          onChange={handleTableChange}
           scroll={{ x: "max-content" }}
         />
       </div>
@@ -332,11 +398,11 @@ const StatusList = () => {
         <Form form={form} layout="vertical">
           {selectedService && selectedService.user && (
             <Descriptions title="Thông tin người dùng" bordered column={1} size="small">
-              <Descriptions.Item label="Tên">{selectedService.user.name}</Descriptions.Item>
-              <Descriptions.Item label="Email">{selectedService.user.email}</Descriptions.Item>
-              {selectedService.user.phone && <Descriptions.Item label="Điện thoại">{selectedService.user.phone}</Descriptions.Item>}
-              {selectedService.user.address && <Descriptions.Item label="Địa chỉ">{selectedService.user.address}</Descriptions.Item>}
-              {selectedService.user.avatar && (
+              <Descriptions.Item label="Tên">{selectedService.user?.name || 'N/A'}</Descriptions.Item>
+              <Descriptions.Item label="Email">{selectedService.user?.email || 'N/A'}</Descriptions.Item>
+              {selectedService.user?.phone && <Descriptions.Item label="Điện thoại">{selectedService.user.phone}</Descriptions.Item>}
+              {selectedService.user?.address && <Descriptions.Item label="Địa chỉ">{selectedService.user.address}</Descriptions.Item>}
+              {selectedService.user?.avatar && (
                 <Descriptions.Item label="Avatar">
                   <Avatar src={selectedService.user.avatar} size="large" />
                 </Descriptions.Item>
@@ -371,20 +437,7 @@ const StatusList = () => {
                         onChange={(e) => updateLink(index, 'title', e.target.value)}
                       />
                     </Form.Item>
-                    <Form.Item
-                      name={`type${index}`}
-                      rules={[{ required: true, message: 'Vui lòng chọn loại link!' }]}
-                      className="w-40 mb-0"
-                    >
-                      <Select
-                        value={link.type}
-                        onChange={(value) => updateLink(index, 'type', value)}
-                        options={[
-                          { value: 'authority', label: 'Link uy quyền' },
-                          { value: 'result', label: 'Link kết quả' }
-                        ]}
-                      />
-                    </Form.Item>
+                  
                   </div>
                   <Form.Item
                     name={`description${index}`}
@@ -400,7 +453,7 @@ const StatusList = () => {
                 </div>
                 <div className="flex gap-2 mt-2">
                   {link.url && link.url.trim() !== '' && (
-                    <Tag color={link.type === 'authority' ? 'blue' : 'green'} style={{ cursor: 'pointer' }}>
+                    <Tag color='blue' style={{ cursor: 'pointer' }}>
                       <a href={link.url} target="_blank" rel="noopener noreferrer"><LinkOutlined /></a>
                     </Tag>
                   )}

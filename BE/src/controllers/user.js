@@ -12,26 +12,21 @@ export const getAllUser = async (req, res, next) => {
             populate: {
                 path: 'service',
                 populate: [
-                    { path: 'service', select: 'name slug image status description' },
+                    { path: 'service', select: 'name slug image status description authorizedLinks' },
                     { path: 'approvedBy', select: 'name email avatar' }
                 ]
             }
         };
         let query = {};
         if (req.query.name) {
-            query.name = { $regex: new RegExp(req.query.name, 'i') };
-        }
-        if (req.query.email) {
-            query.email = { $regex: new RegExp(req.query.email, 'i') };
+            query.$or = [
+                { name: { $regex: new RegExp(req.query.name, 'i') } },
+                { email: { $regex: new RegExp(req.query.name, 'i') } },
+                { phone: { $regex: new RegExp(req.query.name, 'i') } }
+            ];
         }
         if (req.query.role) {
             query.role = req.query.role;
-        }
-        if (req.query.address) {
-            query.address = { $regex: new RegExp(req.query.address, 'i') };
-        }
-        if (req.query.phone) {
-            query.phone = { $regex: new RegExp(req.query.phone, 'i') };
         }
         if (req.query.active) {
             query.active = req.query.active;
@@ -49,7 +44,7 @@ export const getUserById = async (req, res, next) => {
             .populate({
                 path: 'service',
                 populate: [
-                    { path: 'service', select: 'name slug image status description' },
+                    { path: 'service', select: 'name slug image status description authorizedLinks' },
                     { path: 'approvedBy', select: 'name email avatar' }
                 ]
             });
@@ -81,6 +76,9 @@ export const removeUserById = async (req, res, next) => {
 
 export const updateUser = async (req, res, next) => {
     try {
+        if (req.body.password) {
+            req.body.password = await hashPassword(req.body.password);
+        }
         // If updating services, validate and convert to ObjectIds
         if (req.body.service) {
             const user = await User.findById(req.params.id);
@@ -130,7 +128,7 @@ export const updateUser = async (req, res, next) => {
         ).populate({
             path: 'service',
             populate: [
-                { path: 'service', select: 'name slug image status description' },
+                { path: 'service', select: 'name slug image status description authorizedLinks' },
                 { path: 'approvedBy', select: 'name email avatar' }
             ]
         });
@@ -195,7 +193,7 @@ export const updateUserProfile = async (req, res, next) => {
         ).populate({
             path: 'service',
             populate: [
-                { path: 'service', select: 'name slug image status description' },
+                { path: 'service', select: 'name slug image status description authorizedLinks' },
                 { path: 'approvedBy', select: 'name email avatar' }
             ]
         });
@@ -231,7 +229,7 @@ export const removeServiceFromUser = async (req, res, next) => {
             .populate({
                 path: 'service',
                 populate: [
-                    { path: 'service', select: 'name slug image status description' },
+                    { path: 'service', select: 'name slug image status description authorizedLinks' },
                     { path: 'approvedBy', select: 'name email avatar' }
                 ]
             });
@@ -266,7 +264,7 @@ export const removeServiceFromProfile = async (req, res, next) => {
             .populate({
                 path: 'service',
                 populate: [
-                    { path: 'service', select: 'name slug image status description' },
+                    { path: 'service', select: 'name slug image status description authorizedLinks' },
                     { path: 'approvedBy', select: 'name email avatar' }
                 ]
             });
@@ -279,3 +277,138 @@ export const removeServiceFromProfile = async (req, res, next) => {
         next(error);
     }
 };
+
+// Add new information to user
+export const addUserInformation = async (req, res, next) => {
+    try {
+        const { code, title, description, userId } = req.body;
+        const currentUser = req.user;
+
+        // If user is admin, use the provided userId, otherwise use current user's id
+        const targetUserId = currentUser.role === 'admin' ? userId : currentUser._id;
+
+        const user = await User.findById(targetUserId);
+        if (!user) {
+            return res.status(404).json({ message: "Không tìm thấy người dùng" });
+        }
+
+        // Check if information with same code already exists
+        const existingInfo = user.information.find(info => info.code === code);
+        if (existingInfo) {
+            return res.status(400).json({ message: "Mã thông tin đã tồn tại" });
+        }
+
+        user.information.push({
+            code,
+            title,
+            description
+        });
+
+        await user.save();
+
+        return res.status(200).json({
+            data: user,
+            message: "Thêm thông tin thành công"
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// Update user information
+export const updateUserInformation = async (req, res, next) => {
+    try {
+        const { informationId } = req.params;
+        const { code, title, description, userId } = req.body;
+        const currentUser = req.user;
+
+        // If user is admin, use the provided userId, otherwise use current user's id
+        const targetUserId = currentUser.role === 'admin' ? userId : currentUser._id;
+
+        const user = await User.findById(targetUserId);
+        if (!user) {
+            return res.status(404).json({ message: "Không tìm thấy người dùng" });
+        }
+
+        const infoIndex = user.information.findIndex(info => info._id.toString() === informationId);
+        if (infoIndex === -1) {
+            return res.status(404).json({ message: "Không tìm thấy thông tin" });
+        }
+
+        // Check if new code already exists (excluding current info)
+        const existingInfo = user.information.find(
+            info => info.code === code && info._id.toString() !== informationId
+        );
+        if (existingInfo) {
+            return res.status(400).json({ message: "Mã thông tin đã tồn tại" });
+        }
+
+        user.information[infoIndex] = {
+            ...user.information[infoIndex],
+            code,
+            title,
+            description
+        };
+
+        await user.save();
+
+        return res.status(200).json({
+            data: user,
+            message: "Cập nhật thông tin thành công"
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// Delete user information
+export const deleteUserInformation = async (req, res, next) => {
+    try {
+        const { informationId } = req.params;
+        const userId = req.user._id;
+
+        // Check for valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(informationId)) {
+            return res.status(400).json({ message: "Invalid information ID" });
+        }
+
+        // Find user and pull the information
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $pull: { information: { _id: informationId } } },
+            { new: true }
+        ).populate('information');
+
+        if (!user) {
+            return res.status(404).json({ message: "User not found or information not deleted" });
+        }
+
+        return res.status(200).json({
+            data: user,
+            message: "Xóa thông tin thành công"
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
+export const adminChangePassword = async (req, res, next) => {
+    try {
+        const { password } = req.body;
+        if (!password || password.length < 6) {
+            return res.status(400).json({ message: "Mật khẩu là bắt buộc và phải có ít nhất 6 ký tự." });
+        }
+        const hashedPassword = await hashPassword(password);
+        const data = await User.findByIdAndUpdate(
+            req.params.id,
+            { password: hashedPassword },
+            { new: true }
+        );
+        if (!data) {
+            return res.status(404).json({ message: "Không tìm thấy người dùng." });
+        }
+        return res.status(200).json({ message: "Đổi mật khẩu thành công." });
+    } catch (error) {
+        next(error);
+    }
+}

@@ -1,23 +1,27 @@
 import React, { useEffect, useState } from 'react'
 import image from "../image/image.jpg";
 import Logout from "./logout";
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 const Header = () => {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
-    const [userService, setUserService] = useState(null);
+
+    const [user, setUser] = useState(null);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+    const location = useLocation();
+
 
     useEffect(() => {
       const checkAuth = () => {
         const token = localStorage.getItem("accessToken");
-        const userStr = localStorage.getItem("user");
+        const userStr = sessionStorage.getItem("user");
         setIsLoggedIn(!!token);
         
         if (userStr) {
           try {
             const userData = JSON.parse(userStr);
-            setUserService(userData.service);
+            setUser(userData);
           } catch (error) {
             console.error('Error parsing user data:', error);
           }
@@ -25,6 +29,13 @@ const Header = () => {
       };
       checkAuth();
     }, []);
+
+
+    const onLogoutSuccess = () => {
+      setIsLoggedIn(false);
+      setUser(null);
+    };
+
 
     const toggleMenu = () => {
       setIsMenuOpen(!isMenuOpen);
@@ -38,12 +49,22 @@ const Header = () => {
               <img src={image} alt="2T DATA" className="h-[60px] md:h-[80px] w-[60px] md:w-[80px]" />
             </Link>
             
-            <div className="flex md:order-2 space-x-3 md:space-x-0 rtl:space-x-reverse">
-              {isLoggedIn ? (
-                <Logout onLogoutSuccess={() => {
-                  setIsLoggedIn(false);
-                  setUserService(null);
-                }} />
+
+            <div className="flex items-center md:order-2 space-x-3 md:space-x-2 rtl:space-x-reverse">
+              {isLoggedIn && user ? (
+                <>
+                  <Link to="/profile" className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-blue-700 flex items-center justify-center text-white font-bold text-lg cursor-pointer">
+                      {user.avatar ? (
+                        <img src={user.avatar} alt={user.name} className="w-full h-full rounded-full object-cover" />
+                      ) : (
+                        user.name?.charAt(0).toUpperCase()
+                      )}
+                    </div>
+                  </Link>
+                  <Logout onLogoutSuccess={onLogoutSuccess} />
+                </>
+
               ) : (
                 <Link
                   to="/login"
@@ -87,8 +108,14 @@ const Header = () => {
                 <li>
                   <Link
                     to="/"
-                    className="block py-2 px-3 text-white bg-blue-700 rounded-sm md:bg-transparent md:text-blue-700 md:p-0 md:dark:text-blue-500"
-                    aria-current="page"
+
+                    className={`block py-2 px-3 rounded-sm md:p-0 ${
+                      location.pathname === '/'
+                        ? 'text-white bg-blue-700 md:bg-transparent md:text-blue-700 md:dark:text-blue-500'
+                        : 'text-gray-900 hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700'
+                    }`}
+                    aria-current={location.pathname === '/' ? 'page' : undefined}
+
                     onClick={() => setIsMenuOpen(false)}
                   >
                     Trang chủ
@@ -97,17 +124,29 @@ const Header = () => {
                 <li>
                   <Link
                     to="/about"
-                    className="block py-2 px-3 text-gray-900 rounded-sm hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 md:p-0 md:dark:hover:text-blue-500 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700"
+
+                    className={`block py-2 px-3 rounded-sm md:p-0 ${
+                      location.pathname === '/about'
+                        ? 'text-white bg-blue-700 md:bg-transparent md:text-blue-700 md:dark:text-blue-500'
+                        : 'text-gray-900 hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700'
+                    }`}
+
                     onClick={() => setIsMenuOpen(false)}
                   >
                     Giới thiệu
                   </Link>
                 </li>
-                {isLoggedIn && (
+                {isLoggedIn && user && (
                   <li>
                     <Link
                       to="/service/my-service"
-                      className="block py-2 px-3 text-gray-900 rounded-sm hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 md:p-0 md:dark:hover:text-blue-500 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700"
+
+                      className={`block py-2 px-3 rounded-sm md:p-0 ${
+                        location.pathname === '/service/my-service'
+                          ? 'text-white bg-blue-700 md:bg-transparent md:text-blue-700 md:dark:text-blue-500'
+                          : 'text-gray-900 hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700'
+                      }`}
+
                       onClick={() => setIsMenuOpen(false)}
                     >
                       Dịch vụ của tôi
@@ -117,16 +156,43 @@ const Header = () => {
                 <li>
                   <Link
                     to="/service"
-                    className="block py-2 px-3 text-gray-900 rounded-sm hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 md:p-0 md:dark:hover:text-blue-500 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700"
+
+                    className={`block py-2 px-3 rounded-sm md:p-0 ${
+                      location.pathname === '/service'
+                        ? 'text-white bg-blue-700 md:bg-transparent md:text-blue-700 md:dark:text-blue-500'
+                        : 'text-gray-900 hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700'
+                    }`}
+
                     onClick={() => setIsMenuOpen(false)}
                   >
                     Dịch vụ
                   </Link>
                 </li>
+                {user?.role === 'admin' && (
+                  <li>
+                    <Link
+                      to="/admin"
+                      className={`block py-2 px-3 rounded-sm md:p-0 ${
+                        location.pathname === '/admin'
+                          ? 'text-white bg-blue-700 md:bg-transparent md:text-blue-700 md:dark:text-blue-500'
+                          : 'text-gray-900 hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700'
+                      }`}
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      Quản trị
+                    </Link>
+                  </li>
+                )}
                 <li>
                   <Link
                     to="/blogs"
-                    className="block py-2 px-3 text-gray-900 rounded-sm hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 md:p-0 md:dark:hover:text-blue-500 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700"
+
+                    className={`block py-2 px-3 rounded-sm md:p-0 ${
+                      location.pathname === '/blogs'
+                        ? 'text-white bg-blue-700 md:bg-transparent md:text-blue-700 md:dark:text-blue-500'
+                        : 'text-gray-900 hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700'
+                    }`}
+
                     onClick={() => setIsMenuOpen(false)}
                   >
                     Bài viết
