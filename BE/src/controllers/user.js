@@ -76,6 +76,9 @@ export const removeUserById = async (req, res, next) => {
 
 export const updateUser = async (req, res, next) => {
     try {
+        if (req.body.password) {
+            req.body.password = await hashPassword(req.body.password);
+        }
         // If updating services, validate and convert to ObjectIds
         if (req.body.service) {
             const user = await User.findById(req.params.id);
@@ -362,28 +365,23 @@ export const updateUserInformation = async (req, res, next) => {
 export const deleteUserInformation = async (req, res, next) => {
     try {
         const { informationId } = req.params;
-        const currentUser = req.user;
+        const userId = req.user._id;
 
-        // Find the user that contains this information
-        const user = await User.findOne({
-            'information._id': informationId
-        });
+        // Check for valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(informationId)) {
+            return res.status(400).json({ message: "Invalid information ID" });
+        }
+
+        // Find user and pull the information
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $pull: { information: { _id: informationId } } },
+            { new: true }
+        ).populate('information');
 
         if (!user) {
-            return res.status(404).json({ message: "Không tìm thấy thông tin cần xóa" });
+            return res.status(404).json({ message: "User not found or information not deleted" });
         }
-
-        // Check if user is admin or the owner of the information
-        if (currentUser.role !== 'admin' && user._id.toString() !== currentUser._id.toString()) {
-            return res.status(403).json({ message: "Bạn không có quyền xóa thông tin này" });
-        }
-
-        // Remove the information
-        user.information = user.information.filter(
-            info => info._id.toString() !== informationId
-        );
-
-        await user.save();
 
         return res.status(200).json({
             data: user,
@@ -392,4 +390,25 @@ export const deleteUserInformation = async (req, res, next) => {
     } catch (error) {
         next(error);
     }
-};
+}
+
+export const adminChangePassword = async (req, res, next) => {
+    try {
+        const { password } = req.body;
+        if (!password || password.length < 6) {
+            return res.status(400).json({ message: "Mật khẩu là bắt buộc và phải có ít nhất 6 ký tự." });
+        }
+        const hashedPassword = await hashPassword(password);
+        const data = await User.findByIdAndUpdate(
+            req.params.id,
+            { password: hashedPassword },
+            { new: true }
+        );
+        if (!data) {
+            return res.status(404).json({ message: "Không tìm thấy người dùng." });
+        }
+        return res.status(200).json({ message: "Đổi mật khẩu thành công." });
+    } catch (error) {
+        next(error);
+    }
+}

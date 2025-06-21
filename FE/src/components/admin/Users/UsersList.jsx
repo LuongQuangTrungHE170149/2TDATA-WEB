@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { useQueryClient, useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Space, Table, Button, Popconfirm, Tag, Input } from "antd";
+import { Space, Table, Button, Popconfirm, Tag, Input, Modal, Form } from "antd";
 import { toast } from "react-toastify";
-import { EditOutlined, DeleteOutlined, UserOutlined, UndoOutlined, SearchOutlined } from "@ant-design/icons";
+import { EditOutlined, DeleteOutlined, UserOutlined, UndoOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
 import instance from "../../../utils/axiosInstance";
 
 const UsersList = () => {
@@ -11,6 +11,9 @@ const UsersList = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [searchValue, setSearchValue] = useState("");
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [form] = Form.useForm();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["USERS", currentPage, pageSize, searchValue],
@@ -46,6 +49,33 @@ const UsersList = () => {
       toast.error("Không thể khôi phục người dùng: " + error.message);
     },
   });
+
+  const changePasswordMutation = useMutation({
+    mutationFn: ({ id, password }) => instance.patch(`/user/${id}/change-password`, { password }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(["USERS"]);
+      toast.success("Mật khẩu đã được thay đổi thành công!");
+      setIsModalVisible(false);
+      form.resetFields();
+    },
+    onError: (error) => {
+      toast.error("Không thể đổi mật khẩu: " + (error.response?.data?.message || error.message));
+    },
+  });
+
+  const showChangePasswordModal = (user) => {
+    setSelectedUser(user);
+    setIsModalVisible(true);
+  };
+
+  const handleCancel = () => {
+    setIsModalVisible(false);
+    form.resetFields();
+  };
+
+  const onFinishChangePassword = (values) => {
+    changePasswordMutation.mutate({ id: selectedUser._id, password: values.password });
+  };
 
   const handleDelete = (id) => {
     deleteMutation.mutate(id);
@@ -164,8 +194,15 @@ const UsersList = () => {
       render: (_, record) => (
         <Space size="small">
           <Link to={`/admin/users/edit/${record._id}`}>
-            <Button icon={<EditOutlined />} size="small" />
+            <Button icon={<EditOutlined />} size="small" title="Sửa" />
           </Link>
+          <Button
+            icon={<KeyOutlined />}
+            size="small"
+            type="dashed"
+            title="Đổi mật khẩu"
+            onClick={() => showChangePasswordModal(record)}
+          />
           {record.active ? (
             <Popconfirm
               title="Bạn có chắc chắn muốn vô hiệu hóa người dùng này?"
@@ -173,8 +210,8 @@ const UsersList = () => {
               okText="Có"
               cancelText="Không"
             >
-              <Button 
-                icon={<DeleteOutlined />} 
+              <Button
+                icon={<DeleteOutlined />}
                 danger
                 type="primary"
                 size="small"
@@ -187,8 +224,8 @@ const UsersList = () => {
               okText="Có"
               cancelText="Không"
             >
-              <Button 
-                icon={<UndoOutlined />} 
+              <Button
+                icon={<UndoOutlined />}
                 type="primary"
                 size="small"
               />
@@ -200,7 +237,7 @@ const UsersList = () => {
   ];
 
   if (error) return <div className="p-4">Error: {error.message}</div>;
-  
+
   return (
     <div>
       <h2 className="ant-space css-dev-only-do-not-override-1uq9j6g ant-space-horizontal ant-space-align-center ant-space-gap-row-small ant-space-gap-col-small font-semibold text-lg rounded-md bg-[#E9E9E9] w-full p-4 my-8">
@@ -242,6 +279,61 @@ const UsersList = () => {
           scroll={{ x: 900 }}
           size="small"
         />
+        {selectedUser && (
+          <Modal
+            title={`Đổi mật khẩu cho: ${selectedUser.name}`}
+            visible={isModalVisible}
+            onCancel={handleCancel}
+            footer={null}
+            destroyOnClose
+          >
+            <Form
+              form={form}
+              layout="vertical"
+              onFinish={onFinishChangePassword}
+              autoComplete="off"
+            >
+              <Form.Item
+                name="password"
+                label="Mật khẩu mới"
+                rules={[
+                  { required: true, message: 'Vui lòng nhập mật khẩu mới!' },
+                  { min: 6, message: 'Mật khẩu phải có ít nhất 6 ký tự!' },
+                ]}
+                hasFeedback
+              >
+                <Input.Password placeholder="Nhập mật khẩu mới" />
+              </Form.Item>
+              <Form.Item
+                name="confirmPassword"
+                label="Xác nhận mật khẩu mới"
+                dependencies={['password']}
+                hasFeedback
+                rules={[
+                  { required: true, message: 'Vui lòng xác nhận mật khẩu mới!' },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (!value || getFieldValue('password') === value) {
+                        return Promise.resolve();
+                      }
+                      return Promise.reject(new Error('Mật khẩu xác nhận không khớp!'));
+                    },
+                  }),
+                ]}
+              >
+                <Input.Password placeholder="Nhập lại mật khẩu mới" />
+              </Form.Item>
+              <Form.Item className="text-right">
+                <Button onClick={handleCancel} style={{ marginRight: 8 }}>
+                  Hủy
+                </Button>
+                <Button type="primary" htmlType="submit" loading={changePasswordMutation.isLoading}>
+                  Lưu
+                </Button>
+              </Form.Item>
+            </Form>
+          </Modal>
+        )}
       </div>
     </div>
   );

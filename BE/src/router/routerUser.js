@@ -17,7 +17,8 @@ import {
     removeServiceFromProfile,
     addUserInformation,
     updateUserInformation,
-    deleteUserInformation
+    deleteUserInformation,
+    adminChangePassword
 } from "../controllers/user.js";
 
 const routerUser = Router();
@@ -28,6 +29,9 @@ routerUser.get('/:id', checkPermission(), getUserById);
 routerUser.get('/email/:email', checkPermission(), getUserByEmail);
 routerUser.delete('/:id', checkPermission(), removeUserById);
 routerUser.delete('/restore/:id', checkPermission(), restoreUserById);
+
+// Admin change password route (should not have schema validation)
+routerUser.patch('/:id/change-password', checkPermission(), adminChangePassword);
 
 // User information routes (no schema validation needed)
 routerUser.post('/information', getUser, addUserInformation);

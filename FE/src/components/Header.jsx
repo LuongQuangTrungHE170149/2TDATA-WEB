@@ -5,9 +5,8 @@ import { Link, useLocation } from 'react-router-dom';
 
 const Header = () => {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
-    const [userService, setUserService] = useState(null);
+    const [user, setUser] = useState(null);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
-    const [isAdmin, setIsAdmin] = useState(false);
 
     const location = useLocation();
 
@@ -20,8 +19,7 @@ const Header = () => {
         if (userStr) {
           try {
             const userData = JSON.parse(userStr);
-            setUserService(userData.service);
-            setIsAdmin(userData.role === 'admin');
+            setUser(userData);
           } catch (error) {
             console.error('Error parsing user data:', error);
           }
@@ -29,6 +27,11 @@ const Header = () => {
       };
       checkAuth();
     }, []);
+
+    const onLogoutSuccess = () => {
+      setIsLoggedIn(false);
+      setUser(null);
+    };
 
     const toggleMenu = () => {
       setIsMenuOpen(!isMenuOpen);
@@ -42,12 +45,20 @@ const Header = () => {
               <img src={image} alt="2T DATA" className="h-[60px] md:h-[80px] w-[60px] md:w-[80px]" />
             </Link>
             
-            <div className="flex md:order-2 space-x-3 md:space-x-0 rtl:space-x-reverse">
-              {isLoggedIn ? (
-                <Logout onLogoutSuccess={() => {
-                  setIsLoggedIn(false);
-                  setUserService(null);
-                }} />
+            <div className="flex items-center md:order-2 space-x-3 md:space-x-2 rtl:space-x-reverse">
+              {isLoggedIn && user ? (
+                <>
+                  <Link to="/profile" className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-blue-700 flex items-center justify-center text-white font-bold text-lg cursor-pointer">
+                      {user.avatar ? (
+                        <img src={user.avatar} alt={user.name} className="w-full h-full rounded-full object-cover" />
+                      ) : (
+                        user.name?.charAt(0).toUpperCase()
+                      )}
+                    </div>
+                  </Link>
+                  <Logout onLogoutSuccess={onLogoutSuccess} />
+                </>
               ) : (
                 <Link
                   to="/login"
@@ -115,7 +126,7 @@ const Header = () => {
                     Giới thiệu
                   </Link>
                 </li>
-                {isLoggedIn && (
+                {isLoggedIn && user && (
                   <li>
                     <Link
                       to="/service/my-service"
@@ -143,7 +154,7 @@ const Header = () => {
                     Dịch vụ
                   </Link>
                 </li>
-                {isAdmin && (
+                {user?.role === 'admin' && (
                   <li>
                     <Link
                       to="/admin"
