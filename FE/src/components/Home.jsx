@@ -656,24 +656,29 @@ const Home = () => {
                 Nhanh tay để nhận được ưu đãi nhất!
               </p>
               
+
               <form className="space-y-3 md:space-y-4" onSubmit={handleSubmit}>
                 <input
                   type="text"
                   placeholder="Họ và tên"
                   value={formData.name}
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
+
                   className="w-full p-2 md:p-3 rounded-lg border border-gray-300 focus:outline-none focus:border-blue-500 text-sm md:text-base"
                 />
                 <input
                   type="email"
                   placeholder="Nhập Email"
+
                   value={formData.email}
                   onChange={(e) => setFormData({...formData, email: e.target.value})}
+
                   className="w-full p-2 md:p-3 rounded-lg border border-gray-300 focus:outline-none focus:border-blue-500 text-sm md:text-base"
                 />
                 <input
                   type="tel"
                   placeholder="Nhập Số điện thoại"
+
                   value={formData.phoneNumber}
                   onChange={(e) => setFormData({...formData, phoneNumber: e.target.value})}
                   className="w-full p-2 md:p-3 rounded-lg border border-gray-300 focus:outline-none focus:border-blue-500 text-sm md:text-base"
@@ -684,6 +689,7 @@ const Home = () => {
                   className="w-full bg-red-600 text-white py-2 md:py-3 rounded-lg font-bold hover:bg-red-700 transition-colors text-sm md:text-base disabled:bg-red-400"
                 >
                   {addUserInfoMutation.isPending ? "Đang gửi..." : "GỬI ĐĂNG KÝ NGAY!"}
+
                 </button>
               </form>
             </div>
