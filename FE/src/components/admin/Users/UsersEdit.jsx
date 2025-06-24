@@ -142,7 +142,31 @@ const UsersEdit = () => {
 
     const onSubmit = (data) => {
         setIsLoading(true);
-        mutation.mutate({ ...data, avatar }, {
+        console.log('Form data before submission:', data); // Debug log
+
+        // Create update data object
+        const updateData = {
+            ...data,
+            avatar
+        };
+
+        // Only include password if it's not empty
+        if (data.password && data.password.trim() !== '') {
+            updateData.password = data.password;
+        }
+
+        console.log('Update data being sent:', updateData); // Debug log
+
+        mutation.mutate(updateData, {
+            onSuccess: (response) => {
+                console.log('Update successful:', response); // Debug log
+                toast.success("Thông tin người dùng đã được cập nhật thành công!");
+                navigate("/admin");
+            },
+            onError: (error) => {
+                console.error("Error updating user:", error);
+                toast.error(error.response?.data?.message || "Không thể cập nhật thông tin người dùng");
+            },
             onSettled: () => setIsLoading(false)
         });
     };
@@ -379,6 +403,40 @@ const UsersEdit = () => {
                                     )}
                                 />
                             </Form.Item>
+                             <Form.Item
+                                label={
+                                    <Space>
+                                        <span>Mật khẩu</span>
+                                        <Tooltip title="Để trống nếu không muốn thay đổi mật khẩu">
+                                            <InfoCircleOutlined />
+                                        </Tooltip>
+                                    </Space>
+                                }
+                                validateStatus={errors.password ? "error" : ""}
+                                help={errors.password?.message}
+                            >
+                                <Controller
+                                    name="password"
+                                    control={control}
+                                    rules={{
+                                        minLength: { 
+                                            value: 6, 
+                                            message: 'Mật khẩu phải có ít nhất 6 ký tự' 
+                                        },
+                                        pattern: {
+                                            value: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z0-9!@#$%^&*()_+\-\[\]{};':"\\|,.<>/?]{6,}$/,
+                                            message: 'Mật khẩu phải chứa ít nhất 1 chữ hoa, 1 chữ thường và 1 số'
+                                        }
+                                    }}
+                                    render={({ field }) => (
+                                        <Input.Password 
+                                            {...field} 
+                                            placeholder="Nhập mật khẩu mới"
+                                            visibilityToggle
+                                        />
+                                    )}
+                                />
+                            </Form.Item>
 
                             <Form.Item
                                 label={
@@ -466,8 +524,8 @@ const UsersEdit = () => {
                                                     field.onChange(newServices);
                                                 }}
                                             >
-                                                {servicesData?.map(service => (
-                                                    <Option key={service._id} value={service._id}>
+                                                {servicesData?.data?.docs?.map((service, idx) => (
+                                                    <Option key={`${service._id}_${service.customSlug || service.createdAt || idx}`} value={service._id}>
                                                         {service.name}
                                                     </Option>
                                                 ))}
@@ -475,15 +533,15 @@ const UsersEdit = () => {
                                             <div className="mt-4 p-4 border rounded-lg bg-gray-50">
                                                 <h3 className="text-lg font-semibold mb-3">Thông tin dịch vụ đã chọn:</h3>
                                                 <div className="space-y-4">
-                                                    {field.value?.map(service => {
-                                                        const serviceInfo = servicesData?.find(s => s._id === service.id);
+                                                    {field.value?.map((service, idx) => {
+                                                        const serviceInfo = servicesData?.data?.docs?.find(s => s?._id === (service?.id || service?.service?._id)) || service?.service;
                                                         return serviceInfo ? (
-                                                            <div key={serviceInfo._id} className="p-4 border rounded-md bg-white shadow-sm hover:shadow-md transition-shadow">
+                                                            <div key={`${serviceInfo._id}_${serviceInfo.customSlug || serviceInfo.createdAt || idx}`} className="p-4 border rounded-md bg-white shadow-sm hover:shadow-md transition-shadow">
                                                                 <div className="flex gap-4">
                                                                     <div className="w-24 h-24 flex-shrink-0">
                                                                         <img 
-                                                                            src={serviceInfo.image || 'https://t4.ftcdn.net/jpg/04/73/25/49/360_F_473254957_bxG9yf4ly7OBO5I0O5KABlN930GwaMQz.jpg'} 
-                                                                            alt={serviceInfo.name}
+                                                                            src={serviceInfo?.image || 'https://t4.ftcdn.net/jpg/04/73/25/49/360_F_473254957_bxG9yf4ly7OBO5I0O5KABlN930GwaMQz.jpg'} 
+                                                                            alt={serviceInfo?.name}
                                                                             className="w-full h-full object-cover rounded-lg"
                                                                         />
                                                                     </div>
@@ -491,33 +549,33 @@ const UsersEdit = () => {
                                                                         <div className="grid grid-cols-2 gap-3">
                                                                             <div className="flex items-center gap-2">
                                                                                 <span className="font-medium text-gray-700">ID:</span>
-                                                                                <span className="text-gray-600 text-sm">{serviceInfo._id}</span>
+                                                                                <span className="text-gray-600 text-sm">{serviceInfo?._id}</span>
                                                                             </div>
                                                                             <div className="flex items-center gap-2">
                                                                                 <span className="font-medium text-gray-700">Tên:</span>
-                                                                                <Tag color="blue" className="text-sm">{serviceInfo.name}</Tag>
+                                                                                <Tag color="blue" className="text-sm">{serviceInfo?.name}</Tag>
                                                                             </div>
                                                                             <div className="flex items-center gap-2">
                                                                                 <span className="font-medium text-gray-700">Trạng thái:</span>
-                                                                                <Tag color={serviceInfo.status ? "green" : "red"} className="text-sm">
-                                                                                    {serviceInfo.status ? "Hoạt động" : "Không hoạt động"}
+                                                                                <Tag color={serviceInfo?.status ? "green" : "red"} className="text-sm">
+                                                                                    {serviceInfo?.status ? "Hoạt động" : "Không hoạt động"}
                                                                                 </Tag>
                                                                             </div>
                                                                             <div className="flex items-center gap-2">
                                                                                 <span className="font-medium text-gray-700">Xác nhận:</span>
-                                                                                <Tag color={service.status === "waiting" ? "orange" : "green"} className="text-sm">
-                                                                                    {service.status === "waiting" ? "Chưa xác nhận" : "Đã xác nhận"}
+                                                                                <Tag color={service?.status === "waiting" ? "orange" : "green"} className="text-sm">
+                                                                                    {service?.status === "waiting" ? "Chưa xác nhận" : "Đã xác nhận"}
                                                                                 </Tag>
                                                                             </div>
                                                                             <div className="flex items-center gap-2">
                                                                                 <span className="font-medium text-gray-700">Đường dẫn:</span>
                                                                                 <a 
-                                                                                    href={`/service/slug/${serviceInfo.slug}`}
+                                                                                    href={`/service/slug/${serviceInfo?.slug}`}
                                                                                     target="_blank"
                                                                                     rel="noopener noreferrer"
                                                                                     className="text-blue-600 hover:text-blue-800 hover:underline text-sm"
                                                                                 >
-                                                                                    {serviceInfo.slug}
+                                                                                    {serviceInfo?.slug}
                                                                                 </a>
                                                                             </div>
                                                                         </div>
@@ -548,7 +606,7 @@ const UsersEdit = () => {
                             <Table
                                 columns={infoColumns}
                                 dataSource={userData?.information || []}
-                                rowKey="_id"
+                                rowKey={(record, idx) => `${record._id}_${idx}`}
                                 pagination={false}
                             />
                         </Card>

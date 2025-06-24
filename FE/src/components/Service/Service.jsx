@@ -1,27 +1,30 @@
 import Header from "../Header";
 import Footer from "../Footer";  
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Modal, Form, Input, Button, Spin, Checkbox } from 'antd';
+import { Modal, Form, Input, Button, Spin, Checkbox, Table, Tag, Switch, Pagination } from 'antd';
 import { useContext, useState, useEffect } from 'react';
 import { AuthContext } from "../core/Auth";
 import instance from "../../utils/axiosInstance";
 import { useForm, Controller } from "react-hook-form";
 import { toast } from "react-toastify";
 import { useNavigate } from 'react-router-dom';
+import { AppstoreOutlined, TableOutlined } from "@ant-design/icons";
 
 const Service = () => {
   const { currentUser } = useContext(AuthContext);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedServices, setSelectedServices] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCardView, setIsCardView] = useState(true);
   const { control, handleSubmit, reset, formState: { errors } } = useForm();
   const navigate = useNavigate();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const { data: services, isLoading: isLoadingServices } = useQuery({
-    queryKey: ['userServices'],
+    queryKey: ['userServices', page, pageSize],
     queryFn: async () => {
-      const { data } = await instance.get('service');
-      console.log(data)
+      const { data } = await instance.get(`service?page=${page}&limit=${pageSize}`);
       return data;
     },
   });
@@ -121,6 +124,69 @@ const Service = () => {
     }
   };
 
+  const serviceColumns = [
+    {
+      title: "Dịch vụ",
+      dataIndex: "name",
+      key: "name",
+      render: (_, record) => (
+        <div className="flex items-center gap-2">
+          <img
+            src={
+              record?.image ||
+              "https://t4.ftcdn.net/jpg/04/73/25/49/360_F_473254957_bxG9yf4ly7OBO5I0O5KABlN930GwaMQz.jpg"
+            }
+            alt={record?.name}
+            className="w-10 h-10 object-cover rounded"
+          />
+          <div>
+            <div className="font-medium">{record?.name}</div>
+            <div className="text-sm text-gray-500">{record?.slug}</div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: "Trạng thái",
+      dataIndex: "status",
+      key: "status",
+      render: (status) => (
+        <Tag color={status ? "green" : "red"}>
+          {status ? "Hoạt động" : "Không hoạt động"}
+        </Tag>
+      ),
+    },
+    {
+      title: "Thao tác",
+      key: "action",
+      render: (_, record) => (
+        <Checkbox
+          onChange={(e) => handleServiceSelect(record?._id, e.target.checked)}
+          disabled={!record?.status}
+        >
+          Chọn dịch vụ
+        </Checkbox>
+      ),
+    },
+  ];
+
+  // Pagination handler for Table
+  const handleTableChange = (pagination) => {
+    setPage(pagination.current);
+    setPageSize(pagination.pageSize);
+  };
+
+  // Pagination handler for Card view
+  const handleCardPagination = (page, pageSize) => {
+    setPage(page);
+    setPageSize(pageSize);
+  };
+
+  const docs = services?.data?.docs || [];
+  const totalDocs = services?.data?.totalDocs || 0;
+  const current = services?.data?.page || page;
+  const limit = services?.data?.limit || pageSize;
+
   return (
     <div>
       <Header />
@@ -132,39 +198,85 @@ const Service = () => {
         <>
           <div className="container mx-auto pt-[100px] py-12">
             <section className="bg-gray-100 rounded-[32px] max-w-6xl mx-auto mt-8 p-8">
-              <h2 className="text-2xl font-bold text-center mb-8">Các dịch vụ triển khai</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {services?.map((service) => (
-                  <div 
-                    key={service?._id}
-                    className="bg-white rounded-2xl p-6 flex flex-col items-center shadow hover:shadow-lg transition-shadow"
-                  >
-                    <div className="w-20 h-20 rounded-full overflow-hidden mb-4">
-                      <img 
-                        src={service?.image || 'https://t4.ftcdn.net/jpg/04/73/25/49/360_F_473254957_bxG9yf4ly7OBO5I0O5KABlN930GwaMQz.jpg'} 
-                        alt={service?.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="font-semibold mb-4 capitalize">{service.name}</div>
-                    <div className="flex items-center gap-2 mb-4">
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        service?.status 
-                          ? 'bg-green-100 text-green-800 border border-green-200' 
-                          : 'bg-red-100 text-red-800 border border-red-200'
-                      }`}>
-                        {service?.status ? 'Hoạt động' : 'Không hoạt động'}
-                      </span>
-                    </div>
-                    <Checkbox
-                      onChange={(e) => handleServiceSelect(service?._id, e.target.checked)}
-                      disabled={!service?.status}
-                    >
-                      Chọn dịch vụ
-                    </Checkbox>
-                  </div>
-                ))}
+              <div className="flex justify-between items-center mb-8">
+                <h2 className="text-2xl font-bold text-center">
+                  Các dịch vụ triển khai
+                </h2>
+                <div className="flex items-center gap-2">
+                  <AppstoreOutlined className={isCardView ? "text-blue-500" : "text-gray-400"} />
+                  <Switch
+                    checked={!isCardView}
+                    onChange={(checked) => setIsCardView(!checked)}
+                    checkedChildren={<TableOutlined />}
+                    unCheckedChildren={<AppstoreOutlined />}
+                  />
+                  <TableOutlined className={!isCardView ? "text-blue-500" : "text-gray-400"} />
+                </div>
               </div>
+
+              {isCardView ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {docs.map((service) => (
+                      <div 
+                        key={service?._id}
+                        className="bg-white rounded-2xl p-6 flex flex-col items-center shadow hover:shadow-lg transition-shadow"
+                      >
+                        <div className="w-20 h-20 rounded-full overflow-hidden mb-4">
+                          <img 
+                            src={service?.image || 'https://t4.ftcdn.net/jpg/04/73/25/49/360_F_473254957_bxG9yf4ly7OBO5I0O5KABlN930GwaMQz.jpg'} 
+                            alt={service?.name}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="font-semibold mb-4 capitalize">{service?.name}</div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                            service?.status 
+                              ? 'bg-green-100 text-green-800 border border-green-200' 
+                              : 'bg-red-100 text-red-800 border border-red-200'
+                          }`}>
+                            {service?.status ? 'Hoạt động' : 'Không hoạt động'}
+                          </span>
+                        </div>
+                        <Checkbox
+                          onChange={(e) => handleServiceSelect(service?._id, e.target.checked)}
+                          disabled={!service?.status}
+                        >
+                          Chọn dịch vụ
+                        </Checkbox>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-center mt-8">
+                    <Pagination
+                      current={current}
+                      pageSize={limit}
+                      total={totalDocs}
+                      showSizeChanger
+                      pageSizeOptions={['3', '6', '10', '20']}
+                      onChange={handleCardPagination}
+                      showTotal={total => `Tổng số ${total} dịch vụ`}
+                    />
+                  </div>
+                </>
+              ) : (
+                <Table
+                  columns={serviceColumns}
+                  dataSource={docs}
+                  rowKey="_id"
+                  pagination={{
+                    current: current,
+                    pageSize: limit,
+                    total: totalDocs,
+                    showSizeChanger: true,
+                    pageSizeOptions: ['3', '6', '10', '20'],
+                    showTotal: (total) => `Tổng số ${total} dịch vụ`,
+                  }}
+                  onChange={handleTableChange}
+                />
+              )}
+
               {currentUser && (
                 <div className="mt-8 text-center">
                   <Button

@@ -1,34 +1,20 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState, useContext } from 'react'
 import image from "../image/image.jpg";
-import Logout from "./logout";
+import UserDropdown from './UserProfile/UserDropdown';
 import { Link, useLocation } from 'react-router-dom';
+import { AuthContext } from './core/Auth';
+import Dropdown from './PrivacPolicy/Dropdown';
 
 const Header = () => {
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
 
-    const [user, setUser] = useState(null);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const { currentUser, isLogin } = useContext(AuthContext);
 
     const location = useLocation();
 
-
-    useEffect(() => {
-      const checkAuth = () => {
-        const token = localStorage.getItem("accessToken");
-        const userStr = sessionStorage.getItem("user");
-        setIsLoggedIn(!!token);
-        
-        if (userStr) {
-          try {
-            const userData = JSON.parse(userStr);
-            setUser(userData);
-          } catch (error) {
-            console.error('Error parsing user data:', error);
-          }
-        }
-      };
-      checkAuth();
-    }, []);
+    const handleLogoutSuccess = () => {
+      // This will be handled by AuthContext automatically
+    };
 
 
     const onLogoutSuccess = () => {
@@ -50,20 +36,9 @@ const Header = () => {
             </Link>
             
 
-            <div className="flex items-center md:order-2 space-x-3 md:space-x-2 rtl:space-x-reverse">
-              {isLoggedIn && user ? (
-                <>
-                  <Link to="/profile" className="flex items-center">
-                    <div className="w-10 h-10 rounded-full bg-blue-700 flex items-center justify-center text-white font-bold text-lg cursor-pointer">
-                      {user.avatar ? (
-                        <img src={user.avatar} alt={user.name} className="w-full h-full rounded-full object-cover" />
-                      ) : (
-                        user.name?.charAt(0).toUpperCase()
-                      )}
-                    </div>
-                  </Link>
-                  <Logout onLogoutSuccess={onLogoutSuccess} />
-                </>
+            <div className="flex md:order-2 space-x-3 md:space-x-0 rtl:space-x-reverse">
+              {isLogin ? (
+                <UserDropdown onLogoutSuccess={handleLogoutSuccess} />
 
               ) : (
                 <Link
@@ -121,22 +96,10 @@ const Header = () => {
                     Trang chủ
                   </Link>
                 </li>
-                <li>
-                  <Link
-                    to="/about"
 
-                    className={`block py-2 px-3 rounded-sm md:p-0 ${
-                      location.pathname === '/about'
-                        ? 'text-white bg-blue-700 md:bg-transparent md:text-blue-700 md:dark:text-blue-500'
-                        : 'text-gray-900 hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 dark:text-white dark:hover:bg-gray-700 dark:hover:text-white md:dark:hover:bg-transparent dark:border-gray-700'
-                    }`}
+            
+                {isLogin && (
 
-                    onClick={() => setIsMenuOpen(false)}
-                  >
-                    Giới thiệu
-                  </Link>
-                </li>
-                {isLoggedIn && user && (
                   <li>
                     <Link
                       to="/service/my-service"
@@ -168,7 +131,9 @@ const Header = () => {
                     Dịch vụ
                   </Link>
                 </li>
-                {user?.role === 'admin' && (
+
+                {currentUser?.role === 'admin' && (
+
                   <li>
                     <Link
                       to="/admin"
@@ -197,6 +162,9 @@ const Header = () => {
                   >
                     Bài viết
                   </Link>
+                </li>
+                <li>
+                  <Dropdown />
                 </li>
               </ul>
             </div>

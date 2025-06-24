@@ -2,7 +2,6 @@ import mongoose from "mongoose";
 import User from "../model/User.js";
 import { hashPassword } from "../utils/password.js";
 
-
 export const getAllUser = async (req, res, next) => {
     try {
         const options = {
@@ -76,9 +75,13 @@ export const removeUserById = async (req, res, next) => {
 
 export const updateUser = async (req, res, next) => {
     try {
+
+        // Hash password if it is being updated
         if (req.body.password) {
             req.body.password = await hashPassword(req.body.password);
         }
+
+
         // If updating services, validate and convert to ObjectIds
         if (req.body.service) {
             const user = await User.findById(req.params.id);
@@ -390,25 +393,47 @@ export const deleteUserInformation = async (req, res, next) => {
     } catch (error) {
         next(error);
     }
-}
 
-export const adminChangePassword = async (req, res, next) => {
+};
+
+// Lấy danh sách service của user
+export const getUserServices = async (req, res, next) => {
     try {
-        const { password } = req.body;
-        if (!password || password.length < 6) {
-            return res.status(400).json({ message: "Mật khẩu là bắt buộc và phải có ít nhất 6 ký tự." });
+        const page = req.query.page ? +req.query.page : 1;
+        const limit = req.query.limit ? +req.query.limit : 10;
+
+        // Lấy user và populate dịch vụ đã approved
+        const user = await User.findById(req.params.id)
+            .populate({
+                path: 'service',
+         
+                populate: [
+                    { path: 'service', select: 'name slug image status description authorizedLinks' },
+                    { path: 'approvedBy', select: 'name email avatar' }
+                ]
+            });
+
+        if (!user) {
+            return res.status(404).json({ message: "Không tìm thấy user" });
         }
-        const hashedPassword = await hashPassword(password);
-        const data = await User.findByIdAndUpdate(
-            req.params.id,
-            { password: hashedPassword },
-            { new: true }
-        );
-        if (!data) {
-            return res.status(404).json({ message: "Không tìm thấy người dùng." });
-        }
-        return res.status(200).json({ message: "Đổi mật khẩu thành công." });
+
+        // Lấy toàn bộ dịch vụ đã populate
+        const allServices = user.service || [];
+        const totalServices = allServices.length;
+        const start = (page - 1) * limit;
+        const end = start + limit;
+        const paginatedServices = allServices.slice(start, end);
+
+        return res.status(200).json({
+            data: {
+                services: paginatedServices,
+                totalServices,
+                page,
+                limit
+            }
+        });
     } catch (error) {
         next(error);
     }
-}
+};
+
