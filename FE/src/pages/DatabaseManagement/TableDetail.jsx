@@ -7,6 +7,7 @@ import TableHeader from './Components/TableHeader';
 import TableBody from './Components/TableBody';
 import ContextMenu from './Components/ContextMenu';
 import RowColumnCellPermissionModal from '../../components/Table/RowColumnCellPermissionModal';
+import ConditionalFormattingModal from '../../components/Table/ConditionalFormattingModal';
 import {
   addSortRule,
   removeSortRule,
@@ -78,7 +79,8 @@ import {
   isCellEditable,
   getCellEditingStyle,
   prepareCellDataForSave,
-  getCellDisplayComponentType
+  getCellDisplayComponentType,
+  applyConditionalFormatting
 } from './Utils/cellUtils.jsx';
 import {
   getAllColumnsWithSystem,
@@ -89,7 +91,6 @@ import {
 } from './Utils/fieldVisibilityUtils.jsx';
 import {
   filterColumnsByPermission,
-  filterRecordsByPermission,
   getUserDatabaseRole,
   canEditCell
 } from './Utils/permissionUtils.jsx';
@@ -140,6 +141,18 @@ const TableDetail = () => {
       setEditingColumn(null);
       setShowEditColumn(false);
     }
+  }, [tableId]);
+
+  // Reset sort, filter, and group rules when tableId changes
+  useEffect(() => {
+    setSortRules([]);
+    setShowSortDropdown(false);
+    setSortDropdownPosition({ x: 0, y: 0 });
+    setSortFieldSearch('');
+    setCurrentSortField('');
+    setFilterRules([]);
+    setGroupRules([]);
+    setExpandedGroups(new Set());
   }, [tableId]);
   const navigate = useNavigate();
   const { 
@@ -218,6 +231,9 @@ const TableDetail = () => {
   // Cell permission modal
   const [showCellPermissionModal, setShowCellPermissionModal] = useState(false);
   const [selectedCellForPermission, setSelectedCellForPermission] = useState(null);
+  
+  // Conditional formatting modal
+  const [showConditionalFormattingModal, setShowConditionalFormattingModal] = useState(false);
   
   // const [showDebugPanel, setShowDebugPanel] = useState(false);
   // const [debugLogs, setDebugLogs] = useState([]);
@@ -382,6 +398,16 @@ const TableDetail = () => {
     deleteAllRecordsMutation,
     updateColumnMutation,
     deleteColumnMutation,
+    // Permission checks
+    canViewTable,
+    canEditStructure,
+    canEditData,
+    canAddData,
+    canAddView,
+    canEditView,
+    tablePermissionsLoading,
+    formattingRules,
+    formattingRulesLoading,
   } = useTableData(tableId, databaseId, sortRules, filterRules, isFilterActive, tableContext, modalCallbacks);
 
   // Load group preferences from backend when data is available
@@ -680,8 +706,70 @@ const TableDetail = () => {
 
   const tableStructure = tableStructureResponse?.data;
   const table = tableStructure?.table;
-  const columns = tableStructure?.columns || [];
+  const rawColumns = tableStructure?.columns || [];
+  
+  // Transform columns data from API format to frontend format
+  const columns = rawColumns.map(column => {
+    const transformedColumn = { ...column };
+    
+    // Transform config data to match frontend expectations
+    if (column.config) {
+      if (column.config.singleSelectConfig) {
+        transformedColumn.singleSelectConfig = column.config.singleSelectConfig;
+      }
+      if (column.config.multiSelectConfig) {
+        transformedColumn.multiSelectConfig = column.config.multiSelectConfig;
+      }
+      if (column.config.checkboxConfig) {
+        transformedColumn.checkboxConfig = column.config.checkboxConfig;
+      }
+      if (column.config.currencyConfig) {
+        transformedColumn.currencyConfig = column.config.currencyConfig;
+      }
+      if (column.config.percentConfig) {
+        transformedColumn.percentConfig = column.config.percentConfig;
+      }
+      if (column.config.dateConfig) {
+        transformedColumn.dateConfig = column.config.dateConfig;
+      }
+      if (column.config.formulaConfig) {
+        transformedColumn.formulaConfig = column.config.formulaConfig;
+      }
+      if (column.config.urlConfig) {
+        transformedColumn.urlConfig = column.config.urlConfig;
+      }
+      if (column.config.phoneConfig) {
+        transformedColumn.phoneConfig = column.config.phoneConfig;
+      }
+      if (column.config.timeConfig) {
+        transformedColumn.timeConfig = column.config.timeConfig;
+      }
+      if (column.config.ratingConfig) {
+        transformedColumn.ratingConfig = column.config.ratingConfig;
+      }
+      if (column.config.linkedTableConfig) {
+        transformedColumn.linkedTableConfig = column.config.linkedTableConfig;
+      }
+      if (column.config.lookupConfig) {
+        transformedColumn.lookupConfig = column.config.lookupConfig;
+      }
+    }
+    
+    return transformedColumn;
+  });
+  
   const allRecords = recordsResponse?.data || [];
+
+  // Debug log to check columns data
+  console.log('🔍 TableDetail columns loaded:', columns);
+  columns.forEach((column, index) => {
+    console.log(`🔍 Column ${index + 1}:`, {
+      name: column.name,
+      dataType: column.dataType,
+      lookupConfig: column.lookupConfig,
+      lookup_config: column.lookup_config
+    });
+  });
 
   // Handle clicking outside multi-select dropdown and cell selection
   React.useEffect(() => {
@@ -718,15 +806,10 @@ const TableDetail = () => {
 
   // Apply filters and permissions to records
   const records = useMemo(() => {
-    // First apply filters
+    // Apply filters only (no record permission filtering since record permissions are removed)
     const filteredRecords = applyFilterRules(allRecords, filterRules, isFilterActive);
     
-    // Then apply permission filtering
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-    const userRole = getUserDatabaseRole(databaseMembersResponse?.data || [], currentUser);
-    const recordPermissions = recordPermissionsResponse?.data || [];
-    
-    return filterRecordsByPermission(filteredRecords, recordPermissions, currentUser, userRole);
+    return filteredRecords;
   }, [allRecords, filterRules, isFilterActive, recordPermissionsResponse, databaseMembersResponse]);
 
   const handleAddColumn = (e) => {
@@ -934,8 +1017,9 @@ const TableDetail = () => {
         return response.json();
       })
       .then(data => {
-        // Invalidate and refetch table structure
+        // Invalidate and refetch table structure and records
         queryClient.invalidateQueries(['tableStructure', tableId]);
+        queryClient.invalidateQueries(['records', tableId]);
         setShowAddColumn(false);
         setAddColumnPosition(null);
         setNewColumn({ 
@@ -1064,34 +1148,38 @@ const TableDetail = () => {
   };
 
   const handleEditColumn = (column) => {
+    console.log('🔍 handleEditColumn called with column:', column);
+    console.log('🔍 Column lookupConfig:', column.lookupConfig);
+    console.log('🔍 Column lookup_config:', column.lookup_config);
+    
     setEditingColumn({
       _id: column._id,
       name: column.name,
       dataType: column.dataType,
       defaultValue: column.defaultValue !== undefined ? column.defaultValue : (column.dataType === 'currency' ? 0 : null),
-      checkboxConfig: column.checkboxConfig || {
+      checkboxConfig: column.checkboxConfig || column.config?.checkboxConfig || {
         icon: 'check-circle',
         color: '#52c41a',
         defaultValue: false
       },
-      singleSelectConfig: column.singleSelectConfig || {
+      singleSelectConfig: column.singleSelectConfig || column.config?.singleSelectConfig || {
         options: [],
         defaultValue: ''
       },
-      multiSelectConfig: column.multiSelectConfig || {
+      multiSelectConfig: column.multiSelectConfig || column.config?.multiSelectConfig || {
         options: [],
         defaultValue: []
       },
-      dateConfig: column.dateConfig || {
+      dateConfig: column.dateConfig || column.config?.dateConfig || {
         format: 'DD/MM/YYYY'
       },
-      formulaConfig: column.formulaConfig || {
+      formulaConfig: column.formulaConfig || column.config?.formulaConfig || {
         formula: '',
         resultType: 'number',
         dependencies: [],
         description: ''
       },
-      currencyConfig: column.currencyConfig || {
+      currencyConfig: column.currencyConfig || column.config?.currencyConfig || {
         currency: 'USD',
         symbol: '$',
         position: 'before',
@@ -1099,31 +1187,37 @@ const TableDetail = () => {
         thousandsSeparator: ',',
         decimalSeparator: '.'
       },
-      percentConfig: column.percentConfig || {
+      percentConfig: column.percentConfig || column.config?.percentConfig || {
         displayFormat: 'percentage',
         displayAsProgress: false,
         defaultValue: 0
       },
-      urlConfig: column.urlConfig || {
+      urlConfig: column.urlConfig || column.config?.urlConfig || {
         protocol: 'https'
       },
-      phoneConfig: column.phoneConfig || {
+      phoneConfig: column.phoneConfig || column.config?.phoneConfig || {
         // Phone doesn't need special config, but we include it for consistency
       },
-      timeConfig: column.timeConfig || {
+      timeConfig: column.timeConfig || column.config?.timeConfig || {
         format: '24'
       },
-      ratingConfig: column.ratingConfig || {
+      ratingConfig: column.ratingConfig || column.config?.ratingConfig || {
         maxStars: 5,
         icon: 'star',
         color: '#faad14',
         defaultValue: 0
       },
-      linkedTableConfig: column.linkedTableConfig || {
+      linkedTableConfig: column.linkedTableConfig || column.config?.linkedTableConfig || {
         linkedTableId: null,
         allowMultiple: false,
         defaultValue: null,
         filterRules: []
+      },
+      lookupConfig: column.lookupConfig || column.lookup_config || column.config?.lookupConfig || {
+        linkedTableId: null,
+        lookupColumnId: null,
+        linkedTableName: null,
+        lookupColumnName: null
       }
     });
     setShowEditColumn(true);
@@ -1142,6 +1236,17 @@ const TableDetail = () => {
     setSelectedCellForPermission({ recordId, columnId, columnName });
     setShowCellPermissionModal(true);
     // console.log('🚨 Cell Permission Modal should be visible now');
+  };
+
+  const handleConditionalFormatting = () => {
+    setShowConditionalFormattingModal(true);
+  };
+
+  // Function to format cell value with conditional formatting
+  const formatCellWithConditionalFormatting = (value, column, record) => {
+    const formattedValue = formatCellValueForDisplay(value, column);
+    const { style } = applyConditionalFormatting(formattedValue, column, record, formattingRules);
+    return { value: formattedValue, style };
   };
 
   const handleEditColumnSubmit = (e) => {
@@ -1243,6 +1348,17 @@ const TableDetail = () => {
       // });
     }
     
+    // Add lookup configuration if data type is lookup
+    if (editingColumn.dataType === 'lookup') {
+      columnData.lookupConfig = editingColumn.lookupConfig;
+      console.log('🔍 Frontend: Editing lookup column:', {
+        editingColumn: editingColumn,
+        columnData: columnData,
+        lookupConfig: editingColumn.lookupConfig
+      });
+    }
+    
+    console.log('🔍 Final columnData being sent to API:', columnData);
     
     updateColumnMutation.mutate({
       columnId: editingColumn._id,
@@ -1442,7 +1558,9 @@ const TableDetail = () => {
   };
 
   const handleUpdateSortRule = (index, field, order) => {
+    console.log('🔄 Frontend: handleUpdateSortRule called:', { index, field, order });
     const newRules = updateSortRule(sortRules, index, field, order);
+    console.log('🔄 Frontend: New sort rules:', newRules);
     setSortRules(newRules);
   };
 
@@ -1726,6 +1844,12 @@ const TableDetail = () => {
             toggleFieldVisibility={toggleFieldVisibility}
             toggleSystemFields={toggleSystemFields}
             getAllColumnsWithSystem={getAllColumnsWithSystem}
+            // Permission checks
+            canEditStructure={canEditStructure}
+            canAddData={canAddData}
+            canEditData={canEditData}
+            canAddView={canAddView}
+            canEditView={canEditView}
             getVisibleColumns={getVisibleColumns}
             allColumnsWithSystem={allColumnsWithSystem}
             fieldSearch={fieldSearch}
@@ -1756,6 +1880,7 @@ const TableDetail = () => {
             onRowHeightChange={handleRowHeightChange}
             // Column actions
             handleEditColumn={handleEditColumn}
+            handleConditionalFormatting={handleConditionalFormatting}
           />
           {/* Table Body Component */}
           <TableBody
@@ -1811,6 +1936,7 @@ const TableDetail = () => {
             isColumnCompact={isColumnCompact}
             formatCellValueForDisplay={formatCellValueForDisplay}
             formatCellValueForInput={formatCellValueForInput}
+            formatCellWithConditionalFormatting={formatCellWithConditionalFormatting}
             getCellInputType={getCellInputType}
             getCellInputPlaceholder={getCellInputPlaceholder}
             isCellEditable={isCellEditable}
@@ -1833,6 +1959,9 @@ const TableDetail = () => {
             // Permission props
             cellPermissions={cellPermissionsResponse?.data || []}
             currentUser={JSON.parse(localStorage.getItem('user') || '{}')}
+            canEditStructure={canEditStructure}
+            canAddData={canAddData}
+            canEditData={canEditData}
             userRole={getUserDatabaseRole(databaseMembersResponse?.data || [], JSON.parse(localStorage.getItem('user') || '{}'))}
             // Debug props
             cellPermissionsResponse={cellPermissionsResponse}
@@ -1875,7 +2004,7 @@ const TableDetail = () => {
             columns={columns}
             loading={updateColumnMutation.isPending}
             currentTableId={tableId}
-            currentDatabaseId={databaseId}
+            currentDatabaseId={databaseId || null}
           />
 
           {/* Column Permission Modal */}
@@ -1924,6 +2053,16 @@ const TableDetail = () => {
               <div>databaseId: {databaseId}</div>
             </div>
           )} */}
+
+          {/* Conditional Formatting Modal */}
+          <ConditionalFormattingModal
+            visible={showConditionalFormattingModal}
+            onClose={() => setShowConditionalFormattingModal(false)}
+            tableId={tableId}
+            databaseId={databaseId}
+            columns={columns}
+            records={records}
+          />
 
           {/* Debug Panel - Commented out */}
           {/* {showDebugPanel && (

@@ -2,8 +2,7 @@ import mongoose from "mongoose";
 
 const tablePermissionSchema = new mongoose.Schema({
   tableId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Table",
+    type: String, // Changed to String to support both MongoDB ObjectId and PostgreSQL UUID
     required: true
   },
   databaseId: {
@@ -42,6 +41,10 @@ const tablePermissionSchema = new mongoose.Schema({
       default: false
     },
     canAddData: {
+      type: Boolean,
+      default: false
+    },
+    canViewAllRecords: {
       type: Boolean,
       default: false
     },

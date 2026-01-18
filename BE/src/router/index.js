@@ -17,7 +17,9 @@ import adminRouter from "./adminRouter.js";
 
 import routerOrganization from "./routerOrganization.js";
 import routerDatabase from "./routerDatabase.js";
-import testRouter from "./testRouter.js";
+// import testRouter from "./testRouter.js"; // File deleted
+import tableTemplateRouter from "./tableTemplateRouter.js";
+import templateCompleteRoutes from "../routes/templateCompleteRoutes.js";
 import routerOrder from "./orderRouter.js";
 import routerCell from "./routerCell.js";
 import basesRouter from "./bases.routes.js";
@@ -31,7 +33,6 @@ import columnPermsRouter from "./column-perms.routes.js";
 import rolesPermsRouter from "./roles-perms.routes.js";
 import permissionRouter from "./permission.routes.js";
 import postgresRoutes from "../routes/postgresRoutes.js";
-import recordPermissionRouter from "../routes/recordPermissionRoutes.js";
 import columnPermissionRouter from "../routes/columnPermissionRoutes.js";
 import cellPermissionRouter from "../routes/cellPermissionRoutes.js";
 
@@ -66,6 +67,7 @@ router.get("/", (req, res) => {
       iframe: "/api/iframe",
       iframe_n8n: "/api/iframe/n8n/upsert",
       database: "/api/database",
+      templates: "/api/templates",
     },
   });
 });
@@ -92,13 +94,15 @@ router.use(locksRouter);
 router.use(columnsReadRouter);
 router.use("/tables", tableRouter);
 router.use("/postgres", postgresRoutes); // PostgreSQL routes for data models
-router.use("/database", tableRoutesSimple); // Simple PostgreSQL routes for testing
+
+router.use("/database", tableRoutesSimple); // Simple PostgreSQL routes for testing - ENABLED
+
 router.use(columnPermsRouter);
 router.use(rolesPermsRouter);
 router.use("/permissions", permissionRouter);
-router.use("/permissions", recordPermissionRouter);
 router.use("/permissions", columnPermissionRouter);
 router.use("/permissions", cellPermissionRouter);
+// router.use("/conditional-formatting", conditionalFormattingRouter);
 // Admin routes with proper admin interface support
 router.use("/admin", adminRouter);
 
@@ -106,6 +110,9 @@ router.use("/organization", routerOrganization);
 // Mount members and roles routes under /database first to avoid conflicts
 router.use("/database", membersRouter);
 router.use("/database", baseRolesRouter);
-router.use("/database", routerDatabase);
-router.use("/test", testRouter);
+router.use("/database", tableRoutesSimple); // Simple PostgreSQL routes for testing (fallback)
+router.use("/database", routerDatabase); // Database routes with permission checks
+router.use("/templates", tableTemplateRouter); // Old template routes (legacy)
+router.use("/api/templates", templateCompleteRoutes); // New complete template routes
+// router.use("/test", testRouter); // File deleted
 export default router;

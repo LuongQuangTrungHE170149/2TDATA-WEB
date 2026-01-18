@@ -28,6 +28,13 @@ const calculateFormulaColumns = async (records, tableId) => {
     const enhancedRecords = records.map(record => {
       const enhancedRecord = record.toObject ? record.toObject() : record;
       
+      // Ensure data is properly copied to preserve original structure
+      if (enhancedRecord.data) {
+        enhancedRecord.data = { ...enhancedRecord.data };
+      } else {
+        enhancedRecord.data = {};
+      }
+      
       // Calculate each formula column
       formulaColumns.forEach(formulaColumn => {
         try {
@@ -37,7 +44,7 @@ const calculateFormulaColumns = async (records, tableId) => {
             columns
           );
           
-          // Add calculated value to record data
+          // Add calculated value to record data (preserve existing data)
           if (!enhancedRecord.data) enhancedRecord.data = {};
           enhancedRecord.data[formulaColumn.name] = formulaValue;
           
@@ -194,48 +201,88 @@ export const createRecord = async (req, res) => {
       }
 
       // Check if user has permission to create records
-      if (baseMember.role === 'member') {
-      // For members, check table permissions
-      const TablePermission = (await import('../model/TablePermission.js')).default;
+      // Import isOwner utility
+      const { isOwner } = await import('../utils/ownerUtils.js');
       
-      const tablePermissions = await TablePermission.find({
-        tableId: tableId,
-        $or: [
-          { targetType: 'all_members' },
-          { targetType: 'specific_user', userId: userId },
-          { targetType: 'specific_role', role: baseMember.role }
-        ]
-      });
+      // Check if user is owner (database owner or table owner)
+      const userIsOwner = await isOwner(userId, tableId, databaseId);
+      
+      if (userIsOwner) {
+        // Owner có quyền mặc định tạo records
+        console.log('✅ User is owner, bypassing permission check for createRecord');
+      } else if (baseMember.role === 'manager') {
+        // Manager cần kiểm tra permissions cụ thể
+        console.log('🔍 User is manager, checking specific permissions for createRecord');
+        const TablePermission = (await import('../model/TablePermission.js')).default;
+        
+        const tablePermissions = await TablePermission.find({
+          tableId: tableId,
+          $or: [
+            { targetType: 'all_members' },
+            { targetType: 'specific_user', userId: userId },
+            { targetType: 'specific_role', role: baseMember.role }
+          ]
+        });
 
-      let canEditData = false;
-      let canAddData = false;
-      
-      // Sort permissions by priority: specific_user > specific_role > all_members
-      const sortedPermissions = tablePermissions.sort((a, b) => {
-        const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
-        return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
-      });
-      
-      // Check permissions in priority order
-      for (const perm of sortedPermissions) {
-        if (perm.permissions) {
-          if (perm.permissions.canEditData !== undefined) {
-            canEditData = perm.permissions.canEditData;
+        let canEditData = false;
+        let canAddData = false;
+        const sortedPermissions = tablePermissions.sort((a, b) => {
+          const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
+          return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
+        });
+
+        for (const perm of sortedPermissions) {
+          if (perm.permissions) {
+            if (perm.permissions.canEditData !== undefined) { canEditData = perm.permissions.canEditData; }
+            if (perm.permissions.canAddData !== undefined) { canAddData = perm.permissions.canAddData; }
+            break;
           }
-          if (perm.permissions.canAddData !== undefined) {
-            canAddData = perm.permissions.canAddData;
+        }
+
+        if (!canEditData && !canAddData) {
+          return res.status(403).json({ message: 'Access denied - you do not have permission to create records in this table' });
+        }
+      } else if (baseMember.role === 'member') {
+        // For members, check table permissions
+        const TablePermission = (await import('../model/TablePermission.js')).default;
+        
+        const tablePermissions = await TablePermission.find({
+          tableId: tableId,
+          $or: [
+            { targetType: 'all_members' },
+            { targetType: 'specific_user', userId: userId },
+            { targetType: 'specific_role', role: baseMember.role }
+          ]
+        });
+
+        let canEditData = false;
+        let canAddData = false;
+        
+        // Sort permissions by priority: specific_user > specific_role > all_members
+        const sortedPermissions = tablePermissions.sort((a, b) => {
+          const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
+          return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
+        });
+        
+        // Check permissions in priority order
+        for (const perm of sortedPermissions) {
+          if (perm.permissions) {
+            if (perm.permissions.canEditData !== undefined) {
+              canEditData = perm.permissions.canEditData;
+            }
+            if (perm.permissions.canAddData !== undefined) {
+              canAddData = perm.permissions.canAddData;
+            }
+            // Stop at first permission found (highest priority)
+            break;
           }
-          // Stop at first permission found (highest priority)
-          break;
+        }
+
+        if (!canEditData && !canAddData) {
+          return res.status(403).json({ message: 'Access denied - you do not have permission to create records in this table' });
         }
       }
-
-      if (!canEditData && !canAddData) {
-        return res.status(403).json({ message: 'Access denied - you do not have permission to create records in this table' });
-      }
     }
-    }
-    // Owners and managers can always create records
 
     // Get table columns for validation
     const columns = await Column.find({ tableId }).sort({ order: 1 });
@@ -430,7 +477,7 @@ export const createRecord = async (req, res) => {
         created_at: record.created_at,
         updated_at: record.updated_at
       };
-      await updateMetabaseTable(tableId, metabaseRecord, 'insert');
+      await updateMetabaseTable(tableId, metabaseRecord, 'insert', [], databaseId);
       console.log(`✅ Metabase table updated for record: ${record.id}`);
     } catch (metabaseError) {
       console.error('Metabase update failed:', metabaseError);
@@ -438,19 +485,26 @@ export const createRecord = async (req, res) => {
     }
 
     // Tạo default permission cho record
-    const RecordPermission = (await import('../model/RecordPermission.js')).default;
-    const defaultPermission = new RecordPermission({
-      recordId: record.id,
-      tableId: tableId,
-      databaseId: databaseId,
-      targetType: 'all_members',
-      permissions: {
-        canView: true
-      },
-      createdBy: userId,
-      isDefault: true
-    });
-    await defaultPermission.save();
+
+    try {
+      const RecordPermission = (await import('../model/RecordPermission.js')).default;
+      const defaultPermission = new RecordPermission({
+        recordId: record._id,
+        tableId: tableId,
+        databaseId: table.databaseId._id,
+        targetType: 'all_members',
+        name: 'Default Permission',
+        canView: true,
+        canEdit: true,
+        createdBy: userId,
+        isDefault: true
+      });
+      await defaultPermission.save();
+    } catch (permissionError) {
+      console.warn('Failed to create default permission for record:', permissionError.message);
+      // Continue without failing the entire record creation
+    }
+
 
     // Transform PostgreSQL record to match expected format
     const transformedRecord = {
@@ -479,7 +533,7 @@ export const createRecord = async (req, res) => {
 export const getRecords = async (req, res) => {
   try {
     const { tableId } = req.params;
-    const { page = 1, limit = 50, sortRules, forceAscending, filterRules } = req.query;
+    const { page = 1, sortRules, forceAscending, filterRules } = req.query;
     
     if (!req.user) {
       return res.status(401).json({ message: 'User not authenticated' });
@@ -539,7 +593,7 @@ export const getRecords = async (req, res) => {
       }
     }
 
-    const skip = (page - 1) * limit;
+    // No pagination - get all records
     
     // Parse sort rules from query string
     let parsedSortRules = [];
@@ -666,12 +720,10 @@ export const getRecords = async (req, res) => {
 
     // Get records from both MongoDB and PostgreSQL
     const [mongoRecords, postgresRecords] = await Promise.all([
-      Record.find(filterQuery).sort(sortOptions).skip(skip).limit(parseInt(limit)),
+      Record.find(filterQuery).sort(sortOptions),
       PostgresRecord.findAll({
         where: { table_id: tableId },
         order: [['created_at', 'DESC']],
-        limit: parseInt(limit),
-        offset: skip
       })
     ]);
 
@@ -726,9 +778,8 @@ export const getRecords = async (req, res) => {
       data: enhancedRecords,
       pagination: {
         page: parseInt(page),
-        limit: parseInt(limit),
         total: totalRecords,
-        pages: Math.ceil(totalRecords / limit)
+        pages: 1
       },
       sortRules: parsedSortRules,
       filterRules: parsedFilterRules
@@ -807,12 +858,22 @@ export const updateRecord = async (req, res) => {
     }
 
     // Check if user has permission to edit this specific record
-    if (baseMember.role === 'member') {
-      // For members, check record permissions
-      const RecordPermission = (await import('../model/RecordPermission.js')).default;
+    // Import isOwner utility
+    const { isOwner } = await import('../utils/ownerUtils.js');
+    
+    // Check if user is owner (database owner or table owner)
+    const userIsOwner = await isOwner(userId, record.tableId._id, record.tableId.databaseId);
+    
+    if (userIsOwner) {
+      // Owner có quyền mặc định edit records
+      console.log('✅ User is owner, bypassing permission check for updateRecord');
+    } else if (baseMember.role === 'manager') {
+      // Manager cần kiểm tra permissions cụ thể
+      console.log('🔍 User is manager, checking specific permissions for updateRecord');
+      const TablePermission = (await import('../model/TablePermission.js')).default;
       
-      const recordPermissions = await RecordPermission.find({
-        recordId: recordId,
+      const tablePermissions = await TablePermission.find({
+        tableId: record.tableId._id,
         $or: [
           { targetType: 'all_members' },
           { targetType: 'specific_user', userId: userId },
@@ -820,25 +881,54 @@ export const updateRecord = async (req, res) => {
         ]
       });
 
-      let canEditRecord = false;
+      let canEditData = false;
+      const sortedPermissions = tablePermissions.sort((a, b) => {
+        const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
+        return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
+      });
+
+      for (const perm of sortedPermissions) {
+        if (perm.permissions && perm.permissions.canEditData !== undefined) {
+          canEditData = perm.permissions.canEditData;
+          break;
+        }
+      }
+
+      if (!canEditData) {
+        return res.status(403).json({ message: 'Access denied - you do not have permission to edit records in this table' });
+      }
+    } else if (baseMember.role === 'member') {
+      // For members, check table permissions (not record permissions since we removed them)
+      const TablePermission = (await import('../model/TablePermission.js')).default;
+      
+      const tablePermissions = await TablePermission.find({
+        tableId: record.tableId._id,
+        $or: [
+          { targetType: 'all_members' },
+          { targetType: 'specific_user', userId: userId },
+          { targetType: 'specific_role', role: baseMember.role }
+        ]
+      });
+
+      let canEditData = false;
       
       // Sort permissions by priority: specific_user > specific_role > all_members
-      const sortedPermissions = recordPermissions.sort((a, b) => {
+      const sortedPermissions = tablePermissions.sort((a, b) => {
         const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
         return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
       });
       
       // Check permissions in priority order
       for (const perm of sortedPermissions) {
-        if (perm.canEdit !== undefined) {
-          canEditRecord = perm.canEdit;
+        if (perm.permissions && perm.permissions.canEditData !== undefined) {
+          canEditData = perm.permissions.canEditData;
           // Stop at first permission found (highest priority)
           break;
         }
       }
 
-      if (!canEditRecord) {
-        return res.status(403).json({ message: 'Access denied - you do not have permission to edit this record' });
+      if (!canEditData) {
+        return res.status(403).json({ message: 'Access denied - you do not have permission to edit records in this table' });
       }
     }
 
@@ -1069,6 +1159,25 @@ export const updateRecord = async (req, res) => {
     record.data = validatedData;
     await record.save();
 
+    // Update Metabase table
+    try {
+      const { updateMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      const metabaseRecord = {
+        id: record._id,
+        table_id: record.tableId._id,
+        user_id: record.userId,
+        site_id: record.siteId,
+        data: record.data,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt
+      };
+      await updateMetabaseTable(record.tableId._id, metabaseRecord, 'update', [], record.tableId.databaseId);
+      console.log(`✅ Metabase table updated for record: ${record._id}`);
+    } catch (metabaseError) {
+      console.error('Metabase update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
+
     res.status(200).json({
       success: true,
       message: 'Record updated successfully',
@@ -1105,7 +1214,46 @@ export const deleteRecord = async (req, res) => {
     }
 
     // Check if user has permission to delete records
-    if (baseMember.role === 'member') {
+    // Import isOwner utility
+    const { isOwner } = await import('../utils/ownerUtils.js');
+    
+    // Check if user is owner (database owner or table owner)
+    const userIsOwner = await isOwner(userId, record.tableId._id, record.tableId.databaseId);
+    
+    if (userIsOwner) {
+      // Owner có quyền mặc định delete records
+      console.log('✅ User is owner, bypassing permission check for deleteRecord');
+    } else if (baseMember.role === 'manager') {
+      // Manager cần kiểm tra permissions cụ thể
+      console.log('🔍 User is manager, checking specific permissions for deleteRecord');
+      const TablePermission = (await import('../model/TablePermission.js')).default;
+      
+      const tablePermissions = await TablePermission.find({
+        tableId: record.tableId._id,
+        $or: [
+          { targetType: 'all_members' },
+          { targetType: 'specific_user', userId: userId },
+          { targetType: 'specific_role', role: baseMember.role }
+        ]
+      });
+
+      let canEditData = false;
+      const sortedPermissions = tablePermissions.sort((a, b) => {
+        const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
+        return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
+      });
+
+      for (const perm of sortedPermissions) {
+        if (perm.permissions && perm.permissions.canEditData !== undefined) {
+          canEditData = perm.permissions.canEditData;
+          break;
+        }
+      }
+
+      if (!canEditData) {
+        return res.status(403).json({ message: 'Access denied - you do not have permission to delete records in this table' });
+      }
+    } else if (baseMember.role === 'member') {
       // For members, check table permissions
       const TablePermission = (await import('../model/TablePermission.js')).default;
       
@@ -1140,6 +1288,16 @@ export const deleteRecord = async (req, res) => {
       }
     }
     // Owners and managers can always delete records
+
+    // Update Metabase table before deleting
+    try {
+      const { updateMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      await updateMetabaseTable(record.tableId._id, { id: recordId }, 'delete', [], record.tableId.databaseId);
+      console.log(`✅ Metabase table updated for record deletion: ${recordId}`);
+    } catch (metabaseError) {
+      console.error('Metabase delete update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
 
     // Delete all comments associated with this record
     await Comment.deleteMany({ recordId: recordId });
@@ -1188,9 +1346,23 @@ export const deleteMultipleRecords = async (req, res) => {
     }
 
     // Verify all records exist and get their table info
-    const records = await Record.find({
-      _id: { $in: recordIds }
-    }).populate('tableId');
+    // Try PostgreSQL first (more likely for new records)
+    const { Record: PostgresRecord } = await import('../models/postgres/index.js');
+    let records = await PostgresRecord.findAll({
+      where: {
+        id: recordIds
+      },
+      raw: true
+    });
+
+    let isPostgres = records.length > 0;
+
+    // If not found in PostgreSQL, try MongoDB
+    if (!isPostgres) {
+      records = await Record.find({
+        _id: { $in: recordIds }
+      }).populate('tableId');
+    }
 
     if (records.length !== recordIds.length) {
       return res.status(404).json({ 
@@ -1199,23 +1371,85 @@ export const deleteMultipleRecords = async (req, res) => {
     }
 
     // Check if user is a member of the database for all records
-    const tableIds = [...new Set(records.map(r => r.tableId._id))];
-    const tables = await Table.find({ _id: { $in: tableIds } }).populate('databaseId');
-    
-    for (const table of tables) {
-      const baseMember = await BaseMember.findOne({
-        databaseId: table.databaseId._id,
-        userId
-      });
+    // Super admin có quyền xóa record trong mọi database
+    if (!isSuperAdmin(req.user)) {
+      let tableIds;
+      let tables;
 
-      if (!baseMember) {
-        return res.status(403).json({ 
-          message: "Access denied - you are not a member of this database" 
+      if (isPostgres) {
+        // Get unique table IDs from PostgreSQL records
+        tableIds = [...new Set(records.map(r => r.table_id))];
+        // Get tables from PostgreSQL
+        const { Table: PostgresTable } = await import('../models/postgres/index.js');
+        const postgresTables = await PostgresTable.findAll({
+          where: {
+            id: tableIds
+          },
+          raw: true
         });
+        tables = postgresTables.map(t => ({
+          _id: t.id,
+          databaseId: { _id: t.database_id }
+        }));
+      } else {
+        // MongoDB records
+        tableIds = [...new Set(records.map(r => r.tableId._id))];
+        tables = await Table.find({ _id: { $in: tableIds } }).populate('databaseId');
       }
+      
+      for (const table of tables) {
+        const baseMember = await BaseMember.findOne({
+          databaseId: table.databaseId._id,
+          userId
+        });
+
+        if (!baseMember) {
+          return res.status(403).json({ 
+            message: "Access denied - you are not a member of this database" 
+          });
+        }
 
       // Check if user has permission to delete records
-      if (baseMember.role === 'member') {
+      // Import isOwner utility
+      const { isOwner } = await import('../utils/ownerUtils.js');
+      
+      // Check if user is owner (database owner or table owner)
+      const userIsOwner = await isOwner(userId, table._id, table.databaseId._id);
+      
+      if (userIsOwner) {
+        // Owner có quyền mặc định delete records
+        console.log('✅ User is owner, bypassing permission check for deleteMultipleRecords');
+      } else if (baseMember.role === 'manager') {
+        // Manager cần kiểm tra permissions cụ thể
+        console.log('🔍 User is manager, checking specific permissions for deleteMultipleRecords');
+        const TablePermission = (await import('../model/TablePermission.js')).default;
+        
+        const tablePermissions = await TablePermission.find({
+          tableId: table._id,
+          $or: [
+            { targetType: 'all_members' },
+            { targetType: 'specific_user', userId: userId },
+            { targetType: 'specific_role', role: baseMember.role }
+          ]
+        });
+
+        let canEditData = false;
+        const sortedPermissions = tablePermissions.sort((a, b) => {
+          const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
+          return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
+        });
+
+        for (const perm of sortedPermissions) {
+          if (perm.permissions && perm.permissions.canEditData !== undefined) {
+            canEditData = perm.permissions.canEditData;
+            break;
+          }
+        }
+
+        if (!canEditData) {
+          return res.status(403).json({ message: 'Access denied - you do not have permission to delete records in this table' });
+        }
+      } else if (baseMember.role === 'member') {
         const TablePermission = (await import('../model/TablePermission.js')).default;
         
         const tablePermissions = await TablePermission.find({
@@ -1251,19 +1485,62 @@ export const deleteMultipleRecords = async (req, res) => {
         }
       }
     }
+    }
 
     // Delete all comments associated with these records
-    await Comment.deleteMany({ recordId: { $in: recordIds } });
+    if (isPostgres) {
+      // For PostgreSQL records, comments might not exist or be in different format
+      // Skip comment deletion for now as PostgreSQL records don't have MongoDB comments
+      console.log('🔍 Skipping comment deletion for PostgreSQL records');
+    } else {
+      // For MongoDB records, delete comments normally
+      await Comment.deleteMany({ recordId: { $in: recordIds } });
+    }
     
+    // Update Metabase table before deleting
+    try {
+      const { updateMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      
+      if (isPostgres) {
+        // For PostgreSQL records, sync each record deletion
+        for (const record of records) {
+          await updateMetabaseTable(record.table_id, { id: record.id }, 'delete', [], record.table_id);
+          console.log(`✅ Metabase table updated for record deletion: ${record.id}`);
+        }
+      } else {
+        // For MongoDB records, sync each record deletion
+        for (const record of records) {
+          await updateMetabaseTable(record.tableId._id, { id: record._id }, 'delete', [], record.tableId.databaseId);
+          console.log(`✅ Metabase table updated for record deletion: ${record._id}`);
+        }
+      }
+    } catch (metabaseError) {
+      console.error('Metabase bulk delete update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
+
     // Delete all records
-    const result = await Record.deleteMany({
-      _id: { $in: recordIds }
-    });
+    let deletedCount;
+    if (isPostgres) {
+      // Delete PostgreSQL records
+      const deleteResult = await PostgresRecord.destroy({
+        where: {
+          id: recordIds
+        }
+      });
+      deletedCount = deleteResult;
+    } else {
+      // Delete MongoDB records
+      const result = await Record.deleteMany({
+        _id: { $in: recordIds }
+      });
+      deletedCount = result.deletedCount;
+    }
 
     res.status(200).json({
       success: true,
-      message: `${result.deletedCount} records and associated comments deleted successfully`,
-      deletedCount: result.deletedCount
+      message: `${deletedCount} records and associated comments deleted successfully`,
+      deletedCount: deletedCount
     });
   } catch (error) {
     console.error("Error deleting multiple records:", error);
@@ -1319,7 +1596,46 @@ export const deleteAllRecords = async (req, res) => {
     }
 
     // Check if user has permission to delete records
-    if (baseMember.role === 'member') {
+    // Import isOwner utility
+    const { isOwner } = await import('../utils/ownerUtils.js');
+    
+    // Check if user is owner (database owner or table owner)
+    const userIsOwner = await isOwner(userId, tableId, table.databaseId._id);
+    
+    if (userIsOwner) {
+      // Owner có quyền mặc định delete records
+      console.log('✅ User is owner, bypassing permission check for deleteAllRecords');
+    } else if (baseMember.role === 'manager') {
+      // Manager cần kiểm tra permissions cụ thể
+      console.log('🔍 User is manager, checking specific permissions for deleteAllRecords');
+      const TablePermission = (await import('../model/TablePermission.js')).default;
+      
+      const tablePermissions = await TablePermission.find({
+        tableId: tableId,
+        $or: [
+          { targetType: 'all_members' },
+          { targetType: 'specific_user', userId: userId },
+          { targetType: 'specific_role', role: baseMember.role }
+        ]
+      });
+
+      let canEditData = false;
+      const sortedPermissions = tablePermissions.sort((a, b) => {
+        const priority = { 'specific_user': 3, 'specific_role': 2, 'all_members': 1 };
+        return (priority[b.targetType] || 0) - (priority[a.targetType] || 0);
+      });
+
+      for (const perm of sortedPermissions) {
+        if (perm.permissions && perm.permissions.canEditData !== undefined) {
+          canEditData = perm.permissions.canEditData;
+          break;
+        }
+      }
+
+      if (!canEditData) {
+        return res.status(403).json({ message: 'Access denied - you do not have permission to delete records in this table' });
+      }
+    } else if (baseMember.role === 'member') {
       const TablePermission = (await import('../model/TablePermission.js')).default;
       
       const tablePermissions = await TablePermission.find({
@@ -1361,6 +1677,18 @@ export const deleteAllRecords = async (req, res) => {
     }).select('_id');
     
     const recordIds = records.map(record => record._id);
+    
+    // Update Metabase table before deleting all records
+    try {
+      const { updateMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      for (const record of records) {
+        await updateMetabaseTable(tableId, { id: record._id }, 'delete', [], table.databaseId._id);
+        console.log(`✅ Metabase table updated for record deletion: ${record._id}`);
+      }
+    } catch (metabaseError) {
+      console.error('Metabase delete all update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
     
     // Delete all comments associated with records in this table
     if (recordIds.length > 0) {

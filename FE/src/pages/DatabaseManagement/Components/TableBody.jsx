@@ -24,7 +24,8 @@ import {
   AppstoreOutlined,
   ExpandOutlined,
   ZoomInOutlined,
-  LockOutlined
+  LockOutlined,
+  MailOutlined
 } from '@ant-design/icons';
 import DraggableColumnHeader from './DraggableColumnHeader';
 import { formatDateForDisplay, formatDateForInput } from '../../../utils/dateFormatter.js';
@@ -270,6 +271,7 @@ const TableBody = ({
 
   // Utility functions
   formatCellValueForDisplay,
+  formatCellWithConditionalFormatting,
   // Row height props
   tableId,
   databaseId,
@@ -280,7 +282,11 @@ const TableBody = ({
   currentUser,
   userRole,
   cellPermissionsResponse,
-  addDebugLog
+  addDebugLog,
+  // Table permission checks
+  canEditStructure,
+  canAddData,
+  canEditData
 }) => {
   // Debug userRole
   console.log('🚨 TABLEBODY userRole:', userRole, 'type:', typeof userRole);
@@ -300,6 +306,120 @@ const TableBody = ({
   // State for hovered row
   const [hoveredRow, setHoveredRow] = useState(null);
 
+  // State for cell navigation
+  const [focusedCell, setFocusedCell] = useState({ rowIndex: -1, columnIndex: -1 });
+
+  // Handle cell navigation with Tab key
+  const handleCellKeyDown = (e, recordIndex, columnIndex) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      
+      const totalColumns = visibleColumns.length;
+      let newRowIndex = recordIndex;
+      let newColumnIndex = columnIndex;
+      
+      if (e.shiftKey) {
+        // Shift + Tab: move to previous cell
+        if (columnIndex > 0) {
+          newColumnIndex = columnIndex - 1;
+        } else {
+          // Move to last column of previous row
+          const allRecords = groupedData.groups.flatMap(group => group.records);
+          if (recordIndex > 0) {
+            newRowIndex = recordIndex - 1;
+            newColumnIndex = totalColumns - 1;
+          } else {
+            // Stay at current position if at first cell
+            return;
+          }
+        }
+      } else {
+        // Tab: move to next cell
+        if (columnIndex < totalColumns - 1) {
+          newColumnIndex = columnIndex + 1;
+        } else {
+          // Move to first column of next row
+          const allRecords = groupedData.groups.flatMap(group => group.records);
+          if (recordIndex < allRecords.length - 1) {
+            newRowIndex = recordIndex + 1;
+            newColumnIndex = 0;
+          } else {
+            // Stay at current position if at last cell
+            return;
+          }
+        }
+      }
+      
+      setFocusedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
+      
+      // Focus the new cell
+      setTimeout(() => {
+        const newCell = document.querySelector(`[data-cell-id="${newRowIndex}-${newColumnIndex}"]`);
+        if (newCell) {
+          newCell.focus();
+        }
+      }, 0);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      
+      // Move to same column in next row
+      const allRecords = groupedData.groups.flatMap(group => group.records);
+      const ungroupedRecords = groupedData.ungroupedRecords || [];
+      const totalRecords = allRecords.length + ungroupedRecords.length;
+      
+      if (recordIndex < totalRecords - 1) {
+        // Move to same column in next row
+        setFocusedCell({ rowIndex: recordIndex + 1, columnIndex: columnIndex });
+        
+        setTimeout(() => {
+          const newCell = document.querySelector(`[data-cell-id="${recordIndex + 1}-${columnIndex}"]`);
+          if (newCell) {
+            newCell.focus();
+          } else {
+            // Try to find the cell by scrolling through all cells
+            const allCells = document.querySelectorAll('[data-cell-id]');
+            for (let cell of allCells) {
+              const cellId = cell.getAttribute('data-cell-id');
+              if (cellId === `${recordIndex + 1}-${columnIndex}`) {
+                cell.focus();
+                break;
+              }
+            }
+          }
+        }, 0);
+      } else {
+        // At last row - add new row and focus on same column
+        handleAddRow();
+        
+        // Force re-render by updating focused cell state
+        setFocusedCell({ rowIndex: totalRecords, columnIndex: columnIndex });
+        
+        // Use requestAnimationFrame to ensure DOM is updated before focusing
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const newRowIndex = totalRecords; // New row will be at this index
+            const newCell = document.querySelector(`[data-cell-id="${newRowIndex}-${columnIndex}"]`);
+            if (newCell) {
+              newCell.focus();
+            } else {
+              // Try alternative approach: find the last row and focus on the same column
+              const allCells = document.querySelectorAll('[data-cell-id]');
+              for (let cell of allCells) {
+                const cellId = cell.getAttribute('data-cell-id');
+                if (cellId && cellId.startsWith(`${newRowIndex}-`)) {
+                  const cellColumnIndex = parseInt(cellId.split('-')[1]);
+                  if (cellColumnIndex === columnIndex) {
+                    cell.focus();
+                    break;
+                  }
+                }
+              }
+            }
+          });
+        });
+      }
+    }
+  };
 
   // Format datetime to YYYY-MM-DD HH:MM format
   const formatDateTime = (dateString) => {
@@ -319,44 +439,25 @@ const TableBody = ({
 
   // Helper function to check if cell can be edited
   const isCellEditableByPermission = (recordId, columnId) => {
-    console.log('🔍 isCellEditableByPermission called:', {
-      recordId,
-      columnId,
-      cellPermissions: cellPermissions?.length || 0,
-      cellPermissionsResponse: cellPermissionsResponse,
-      currentUser: currentUser?._id,
-      userRole
-    });
     
     
     if (!cellPermissions || !currentUser || !userRole) {
-      console.log('🔍 Missing permission data, defaulting to editable');
       return true; // Default to editable if no permission data
     }
     
     const result = canEditCell(cellPermissions, recordId, columnId, currentUser, userRole);
-    console.log('🔍 isCellEditableByPermission result:', result);
     return result;
   };
 
   // Helper function to check if current editing cell can be edited
   const canEditCurrentCell = () => {
-    console.log('🔍 canEditCurrentCell called:', {
-      editingCell: editingCell,
-      hasColumn: !!editingCell?.column,
-      hasColumnId: !!editingCell?.column?._id,
-      recordId: editingCell?.recordId,
-      columnId: editingCell?.column?._id
-    });
     
     
     if (!editingCell || !editingCell.column || !editingCell.column._id) {
-      console.log('🔍 canEditCurrentCell: Missing editingCell data, returning false');
       return false;
     }
     
     const result = isCellEditableByPermission(editingCell.recordId, editingCell.column._id);
-    console.log('🔍 canEditCurrentCell result:', result);
     return result;
   };
 
@@ -475,7 +576,7 @@ const TableBody = ({
           {/* Data Columns */}
           {visibleColumns.map((column, index) => (
             <DraggableColumnHeader
-              key={column._id}
+              key={column.id || column._id}
               column={column}
               columnWidths={columnWidths}
               sortRules={[]}
@@ -570,20 +671,23 @@ const TableBody = ({
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Tooltip title={`Add record to ${group.rules[0].field}: ${String(group.values[0] || '(empty)')}`}>
+                    <Tooltip title={canAddData ? `Add record to ${group.rules[0].field}: ${String(group.values[0] || '(empty)')}` : 'No permission to add records'}>
                       <Button
                         type="text"
                         size="small"
                         icon={<PlusOutlined />}
+                        disabled={!canAddData}
                         style={{
-                          color: '#52c41a',
+                          color: canAddData ? '#52c41a' : '#d9d9d9',
                           fontSize: '12px',
                           padding: '2px 4px',
                           minWidth: 'auto'
                         }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleAddRowToGroup(group.values, group.rules);
+                          if (canAddData) {
+                            handleAddRowToGroup(group.values, group.rules);
+                          }
                         }}
                       />
                     </Tooltip>
@@ -600,15 +704,19 @@ const TableBody = ({
                 </div>
 
                 {/* Group Records */}
-                {isExpanded && group.records.map((record, index) => (
-                  <div key={record._id} style={{
-                    display: 'flex',
-                    borderBottom: '1px solid #f0f0f0',
-                    backgroundColor: 'white',
-                    ...rowHeightStyle
-                  }}
-                    onContextMenu={(e) => handleContextMenu(e, record._id)}
-                  >
+                {isExpanded && group.records.map((record, recordIndexInGroup) => {
+                  // Calculate global record index for this record
+                  const globalRecordIndex = groupedData.groups.slice(0, groupIndex).reduce((acc, g) => acc + g.records.length, 0) + recordIndexInGroup;
+                  
+                  return (
+                    <div key={record._id} style={{
+                      display: 'flex',
+                      borderBottom: '1px solid #f0f0f0',
+                      backgroundColor: 'white',
+                      ...rowHeightStyle
+                    }}
+                      onContextMenu={(e) => handleContextMenu(e, record._id)}
+                    >
                     {/* Checkbox and Index */}
                     <div 
                       style={{
@@ -735,17 +843,33 @@ const TableBody = ({
                       }
                       const isEditing = isCellEditing(editingCell, record._id, column.name);
                       const isSelected = isCellSelected(record._id, column.name);
+                      const isFocused = focusedCell.rowIndex === globalRecordIndex && focusedCell.columnIndex === index;
 
                       return (
-                        <div key={column._id} style={{
-                          width: getColumnWidthString(columnWidths, column._id),
-                          minWidth: '50px',
-                          padding: '0',
-                          borderRight: '1px solid #d9d9d9',
-                          position: 'relative',
-                          ...cellContentStyle,
-                          boxShadow: isSelected ? 'inset 0 0 0 2px #1890ff' : 'none'
-                        }}>
+                        <div 
+                          key={column._id} 
+                          data-cell-id={`${globalRecordIndex}-${index}`}
+                          tabIndex={0}
+                          onKeyDown={(e) => handleCellKeyDown(e, globalRecordIndex, index)}
+                          onFocus={() => {
+                            setFocusedCell({ rowIndex: globalRecordIndex, columnIndex: index });
+                            // Auto edit when focusing on editable cell
+                            if (!column.isSystem && isCellEditableByPermission(record._id, column._id)) {
+                              handleCellClick(record._id, column.name, value);
+                            }
+                          }}
+                          style={{
+                            width: getColumnWidthString(columnWidths, column._id),
+                            minWidth: '50px',
+                            padding: '0',
+                            borderRight: '1px solid #d9d9d9',
+                            position: 'relative',
+                            ...cellContentStyle,
+                            boxShadow: isSelected ? 'inset 0 0 0 2px #1890ff' : (isFocused ? 'inset 0 0 0 2px #1890ff' : 'none'),
+                            backgroundColor: isFocused ? '#e6f7ff' : 'transparent',
+                            outline: 'none'
+                          }}
+                        >
                           {isEditing ? (
                             (() => {
                               const dataType = column.dataType;
@@ -906,6 +1030,31 @@ const TableBody = ({
                                       boxShadow: 'none',
                                       fontSize: 'inherit',
                                       height: '100%'
+                                    }}
+                                  />
+                                );
+                              } else if (dataType === 'email') {
+                                return (
+                                  <Input
+                                    type="email"
+                                    value={cellValue}
+                                    onChange={(e) => {
+                                      if (!canEditCurrentCell()) {
+                                        console.log('🔍 Permission denied: Cannot edit email cell');
+                                        return;
+                                      }
+                                      setCellValue(e.target.value);
+                                    }}
+                                    onPressEnter={handleCellSave}
+                                    onBlur={handleCellSave}
+                                    autoFocus
+                                    size="small"
+                                    placeholder="Enter email address"
+                                    disabled={!canEditCurrentCell()}
+                                    style={{
+                                      width: '100%',
+                                      border: '1px solid #d9d9d9',
+                                      borderRadius: '4px'
                                     }}
                                   />
                                 );
@@ -1374,7 +1523,7 @@ const TableBody = ({
                                   isEditable: isCellEditableByPermission(record._id, column._id)
                                 });
                                 
-                                if (column.isSystem || column.dataType === 'checkbox' || column.dataType === 'single_select' || column.dataType === 'multi_select' || column.dataType === 'linked_table' || column.dataType === 'lookup' || !isCellEditableByPermission(record._id, column._id)) {
+                                if (column.isSystem || column.dataType === 'checkbox' || column.dataType === 'single_select' || column.dataType === 'multi_select' || column.dataType === 'linked_table' || column.dataType === 'lookup' || column.dataType === 'json' || !isCellEditableByPermission(record._id, column._id)) {
                                   console.log('🔍 Cell click blocked by conditions');
                                   return;
                                 }
@@ -1536,11 +1685,16 @@ const TableBody = ({
                                               </div>
                                             )}
                                           >
-                                            {options.map((option, index) => (
-                                              <Option key={index} value={option}>
-                                                {String(option || '')}
-                                              </Option>
-                                            ))}
+                                            {options.map((option, index) => {
+                                              // Handle both string and object options
+                                              const optionValue = typeof option === 'object' ? (option.id || option.name) : option;
+                                              const optionLabel = typeof option === 'object' ? option.name : option;
+                                              return (
+                                                <Option key={index} value={optionValue}>
+                                                  {String(optionLabel || '')}
+                                                </Option>
+                                              );
+                                            })}
                                           </Select>
                                         );
                                       })()
@@ -1570,6 +1724,58 @@ const TableBody = ({
                                           color="#1890ff"
                                           height="6px"
                                         />
+                                      ) : column.dataType === 'percent' ? (
+                                        (() => {
+                                          const numValue = Number(String(value)) || 0;
+                                          const displayFormat = column.percentConfig?.displayFormat || 'percentage';
+                                          
+                                          if (displayFormat === 'decimal') {
+                                            // Display as decimal (e.g., 0.25 for 25%)
+                                            return (numValue / 100).toFixed(2);
+                                          } else {
+                                            // Display as percentage (e.g., 25%)
+                                            return `${numValue}%`;
+                                          }
+                                        })()
+                                      ) : column.dataType === 'json' ? (
+                                        (() => {
+                                          try {
+                                            if (!value || value === '') {
+                                              return <span style={{ color: '#999', fontStyle: 'italic' }}>Empty JSON</span>;
+                                            }
+                                            
+                                            // Try to parse and format JSON
+                                            const jsonValue = typeof value === 'string' ? JSON.parse(value) : value;
+                                            const formattedJson = JSON.stringify(jsonValue, null, 2);
+                                            
+                                            return (
+                                              <div style={{ 
+                                                fontFamily: 'monospace', 
+                                                fontSize: '12px',
+                                                backgroundColor: '#f5f5f5',
+                                                padding: '4px 8px',
+                                                borderRadius: '4px',
+                                                border: '1px solid #d9d9d9',
+                                                maxWidth: '200px',
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
+                                              }}>
+                                                {formattedJson.length > 50 ? `${formattedJson.substring(0, 50)}...` : formattedJson}
+                                              </div>
+                                            );
+                                          } catch (error) {
+                                            return (
+                                              <div style={{ 
+                                                color: '#ff4d4f',
+                                                fontFamily: 'monospace',
+                                                fontSize: '12px'
+                                              }}>
+                                                Invalid JSON
+                                              </div>
+                                            );
+                                          }
+                                        })()
                                       ) : column.dataType === 'linked_table' ?
                                         (() => {
                                           const linkedValue = value;
@@ -1702,6 +1908,14 @@ const TableBody = ({
                                               );
                                             }
                                             
+                                            if (formatCellWithConditionalFormatting) {
+                                              const { value: formattedValue, style } = formatCellWithConditionalFormatting(value, column, record);
+                                              return (
+                                                <span style={style}>
+                                                  {formattedValue}
+                                                </span>
+                                              );
+                                            }
                                             return formatCellValueForDisplay ? formatCellValueForDisplay(value, column) : (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value || ''));
                                           })()
                               }
@@ -1736,20 +1950,30 @@ const TableBody = ({
                       padding: '8px'
                     }} />
                   </div>
-                ))}
+                  );
+                })}
 
                 {/* Add New Record to Group */}
                 {isExpanded && (
                   <div style={{
                     display: 'flex',
                     borderBottom: '1px solid #d9d9d9',
-                    backgroundColor: '#fafafa',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.2s'
+                    backgroundColor: canAddData ? '#fafafa' : '#f5f5f5',
+                    cursor: canAddData ? 'pointer' : 'not-allowed',
+                    transition: 'background-color 0.2s',
+                    opacity: canAddData ? 1 : 0.6
                   }}
-                    onClick={() => handleAddRowToGroup(String(group.values), group.rules)}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f0f0f0'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#fafafa'}
+                    onClick={canAddData ? () => handleAddRowToGroup(String(group.values), group.rules) : undefined}
+                    onMouseEnter={(e) => {
+                      if (canAddData) {
+                        e.currentTarget.style.backgroundColor = '#f0f0f0';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (canAddData) {
+                        e.currentTarget.style.backgroundColor = '#fafafa';
+                      }
+                    }}
                   >
                     {/* Checkbox and Index Column */}
                     <div style={{
@@ -1796,14 +2020,19 @@ const TableBody = ({
           })}
 
           {/* Ungrouped Records */}
-          {groupedData.ungroupedRecords.map((record, index) => (
-            <div key={record._id} style={{
-              display: 'flex',
-              borderBottom: '1px solid #f0f0f0',
-              ...rowHeightStyle
-            }}
-              onContextMenu={(e) => handleContextMenu(e, record._id)}
-            >
+          {groupedData.ungroupedRecords.map((record, recordIndex) => {
+            // Calculate global record index for ungrouped records
+            const totalGroupedRecords = groupedData.groups.reduce((acc, group) => acc + group.records.length, 0);
+            const globalRecordIndex = totalGroupedRecords + recordIndex;
+            
+            return (
+              <div key={record._id} style={{
+                display: 'flex',
+                borderBottom: '1px solid #f0f0f0',
+                ...rowHeightStyle
+              }}
+                onContextMenu={(e) => handleContextMenu(e, record._id)}
+              >
               {/* Checkbox and Index */}
               <div 
                 style={{
@@ -1849,7 +2078,7 @@ const TableBody = ({
                   }}
                     className="index-number"
                   >
-                    {index + 1}
+                    {recordIndex + 1}
                   </span>
                 </div>
                 <Tooltip title="Chỉnh sửa bản ghi">
@@ -1929,18 +2158,34 @@ const TableBody = ({
                 }
                 const isEditing = editingCell?.recordId === record._id && editingCell?.columnName === column.name;
                 const isSelected = isCellSelected(record._id, column.name);
+                const isFocused = focusedCell.rowIndex === globalRecordIndex && focusedCell.columnIndex === index;
 
                 const isLastColumn = index === visibleColumns.length - 1;
                 return (
-                  <div key={column._id} style={{
-                    width: getColumnWidthString(columnWidths, column._id),
-                    minWidth: '50px',
-                    padding: '0',
-                    borderRight: '1px solid #d9d9d9',
-                    position: 'relative',
-                    ...cellContentStyle,
-                    boxShadow: isSelected ? 'inset 0 0 0 2px #1890ff' : 'none'
-                  }}>
+                  <div 
+                    key={column._id} 
+                    data-cell-id={`${globalRecordIndex}-${index}`}
+                    tabIndex={0}
+                    onKeyDown={(e) => handleCellKeyDown(e, globalRecordIndex, index)}
+                    onFocus={() => {
+                      setFocusedCell({ rowIndex: globalRecordIndex, columnIndex: index });
+                      // Auto edit when focusing on editable cell
+                      if (!column.isSystem && isCellEditableByPermission(record._id, column._id)) {
+                        handleCellClick(record._id, column.name, value);
+                      }
+                    }}
+                    style={{
+                      width: getColumnWidthString(columnWidths, column._id),
+                      minWidth: '50px',
+                      padding: '0',
+                      borderRight: '1px solid #d9d9d9',
+                      position: 'relative',
+                      ...cellContentStyle,
+                      boxShadow: isSelected ? 'inset 0 0 0 2px #1890ff' : (isFocused ? 'inset 0 0 0 2px #1890ff' : 'none'),
+                      backgroundColor: isFocused ? '#e6f7ff' : 'transparent',
+                      outline: 'none'
+                    }}
+                  >
                     {isEditing ? (
                       (() => {
                         const dataType = column.dataType;
@@ -2019,6 +2264,42 @@ const TableBody = ({
                                 boxSizing: 'border-box',
                                 outline: 'none',
                                 cursor: canEditCurrentCell() ? 'text' : 'not-allowed'
+                              }}
+                            />
+                          );
+                        } else if (dataType === 'email') {
+                          return (
+                            <Input
+                              type="email"
+                              value={cellValue}
+                              onChange={(e) => {
+                                if (!canEditCurrentCell()) {
+                                  console.log('🔍 Permission denied: Cannot edit email cell (grouped)');
+                                  return;
+                                }
+                                setCellValue(e.target.value);
+                              }}
+                              onPressEnter={handleCellSave}
+                              onBlur={handleCellSave}
+                              autoFocus
+                              size="small"
+                              placeholder="Enter email address"
+                              disabled={!canEditCurrentCell()}
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                border: 'none',
+                                padding: '0',
+                                margin: '0',
+                                borderRadius: '0',
+                                backgroundColor: 'transparent',
+                                boxShadow: 'none',
+                                fontSize: 'inherit',
+                                position: 'absolute',
+                                top: '0',
+                                left: '0',
+                                right: '0',
+                                bottom: '0'
                               }}
                             />
                           );
@@ -2395,7 +2676,7 @@ const TableBody = ({
                             isEditable: isCellEditableByPermission(record._id, column._id)
                           });
                           
-                          if (column.isSystem || column.dataType === 'checkbox' || column.dataType === 'single_select' || column.dataType === 'multi_select' || column.dataType === 'linked_table' || column.dataType === 'lookup' || !isCellEditableByPermission(record._id, column._id)) {
+                          if (column.isSystem || column.dataType === 'checkbox' || column.dataType === 'single_select' || column.dataType === 'multi_select' || column.dataType === 'linked_table' || column.dataType === 'lookup' || column.dataType === 'json' || !isCellEditableByPermission(record._id, column._id)) {
                             console.log('🔍 Cell click blocked by conditions (grouped)');
                             return;
                           }
@@ -2454,7 +2735,20 @@ const TableBody = ({
                                 return displayUrl;
                               })()
                               : column.dataType === 'email' && value ?
-                                value
+                                <a 
+                                  href={`mailto:${value}`} 
+                                  style={{ 
+                                    color: '#1890ff', 
+                                    textDecoration: 'none',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <MailOutlined style={{ fontSize: '12px' }} />
+                                  {value}
+                                </a>
                                 : column.dataType === 'phone' && value ?
                                   value
                                   : column.dataType === 'time' && value ?
@@ -2678,11 +2972,16 @@ const TableBody = ({
                                             </div>
                                           )}
                                         >
-                                          {options.map((option, index) => (
-                                            <Option key={index} value={option}>
-                                              {String(option || '')}
-                                            </Option>
-                                          ))}
+                                          {options.map((option, index) => {
+                                            // Handle both string and object options
+                                            const optionValue = typeof option === 'object' ? (option.id || option.name) : option;
+                                            const optionLabel = typeof option === 'object' ? option.name : option;
+                                            return (
+                                              <Option key={index} value={optionValue}>
+                                                {String(optionLabel || '')}
+                                              </Option>
+                                            );
+                                          })}
                                         </Select>
                                       );
                                     })()
@@ -2717,6 +3016,58 @@ const TableBody = ({
                                         color="#1890ff"
                                         height="6px"
                                       />
+                                    ) : column.dataType === 'percent' ? (
+                                      (() => {
+                                        const numValue = Number(String(value)) || 0;
+                                        const displayFormat = column.percentConfig?.displayFormat || 'percentage';
+                                        
+                                        if (displayFormat === 'decimal') {
+                                          // Display as decimal (e.g., 0.25 for 25%)
+                                          return (numValue / 100).toFixed(2);
+                                        } else {
+                                          // Display as percentage (e.g., 25%)
+                                          return `${numValue}%`;
+                                        }
+                                      })()
+                                    ) : column.dataType === 'json' ? (
+                                      (() => {
+                                        try {
+                                          if (!value || value === '') {
+                                            return <span style={{ color: '#999', fontStyle: 'italic' }}>Empty JSON</span>;
+                                          }
+                                          
+                                          // Try to parse and format JSON
+                                          const jsonValue = typeof value === 'string' ? JSON.parse(value) : value;
+                                          const formattedJson = JSON.stringify(jsonValue, null, 2);
+                                          
+                                          return (
+                                            <div style={{ 
+                                              fontFamily: 'monospace', 
+                                              fontSize: '12px',
+                                              backgroundColor: '#f5f5f5',
+                                              padding: '4px 8px',
+                                              borderRadius: '4px',
+                                              border: '1px solid #d9d9d9',
+                                              maxWidth: '200px',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap'
+                                            }}>
+                                              {formattedJson.length > 50 ? `${formattedJson.substring(0, 50)}...` : formattedJson}
+                                            </div>
+                                          );
+                                        } catch (error) {
+                                          return (
+                                            <div style={{ 
+                                              color: '#ff4d4f',
+                                              fontFamily: 'monospace',
+                                              fontSize: '12px'
+                                            }}>
+                                              Invalid JSON
+                                            </div>
+                                          );
+                                        }
+                                      })()
                                     ) : column.dataType === 'linked_table' ?
                                       (() => {
                                         const linkedValue = value;
@@ -2849,6 +3200,14 @@ const TableBody = ({
                                             );
                                           }
                                           
+                                          if (formatCellWithConditionalFormatting) {
+                                            const { value: formattedValue, style } = formatCellWithConditionalFormatting(value, column, record);
+                                            return (
+                                              <span style={style}>
+                                                {formattedValue}
+                                              </span>
+                                            );
+                                          }
                                           return formatCellValueForDisplay ? formatCellValueForDisplay(value, column) : (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value || ''));
                                         })()
                         }
@@ -2883,19 +3242,29 @@ const TableBody = ({
                 padding: '8px'
               }} />
             </div>
-          ))}
+            );
+          })}
 
           {/* Add Row Footer */}
           <div style={{
             display: 'flex',
             borderBottom: '1px solid #d9d9d9',
-            backgroundColor: '#fafafa',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            backgroundColor: canAddData ? '#fafafa' : '#f5f5f5',
+            cursor: canAddData ? 'pointer' : 'not-allowed',
+            transition: 'background-color 0.2s',
+            opacity: canAddData ? 1 : 0.6
           }}
-            onClick={handleAddRow}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f0f0f0'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#fafafa'}
+            onClick={canAddData ? handleAddRow : undefined}
+            onMouseEnter={(e) => {
+              if (canAddData) {
+                e.currentTarget.style.backgroundColor = '#f0f0f0';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (canAddData) {
+                e.currentTarget.style.backgroundColor = '#fafafa';
+              }
+            }}
           >
             {/* Checkbox and Index Column */}
             <div style={{
@@ -2909,7 +3278,7 @@ const TableBody = ({
             }}>
               <PlusOutlined
                 style={{
-                  color: '#1890ff',
+                  color: canAddData ? '#1890ff' : '#d9d9d9',
                   fontSize: '16px',
                   fontWeight: 'bold'
                 }}

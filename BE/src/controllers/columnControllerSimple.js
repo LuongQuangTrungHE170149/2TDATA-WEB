@@ -1,5 +1,6 @@
-import { Table as PostgresTable, Column as PostgresColumn } from '../models/postgres/index.js';
+import { Table as PostgresTable, Column as PostgresColumn, Record as PostgresRecord } from '../models/postgres/index.js';
 import { createMetabaseTable } from '../utils/metabaseTableCreator.js';
+import { Op } from 'sequelize';
 
 // Simple Column Controllers that use PostgreSQL
 export const createColumnSimple = async (req, res) => {
@@ -108,13 +109,135 @@ export const createColumnSimple = async (req, res) => {
 
     console.log(`✅ Column created in PostgreSQL: ${newColumn.name} (${newColumn.data_type})`);
 
-    // Recreate Metabase table with new column
+    // Tạo default permission cho column
     try {
-      const metabaseResult = await createMetabaseTable(tableId, table.name, 'column-added');
+      const ColumnPermission = (await import('../model/ColumnPermission.js')).default;
+      console.log('🔍 Creating default permission for column:', {
+        columnId: newColumn.id,
+        columnName: newColumn.name,
+        tableId: tableId,
+        databaseId: table.database_id,
+        userId: userId
+      });
+      
+      // Validate database_id
+      if (!table.database_id) {
+        console.error('❌ Cannot create default permission: table.database_id is undefined');
+        return;
+      }
+      
+      // Convert database_id and userId to ObjectId (MongoDB fields)
+      // columnId and tableId remain as strings (PostgreSQL UUIDs)
+      const mongoose = (await import('mongoose')).default;
+      const databaseObjectId = new mongoose.Types.ObjectId(table.database_id);
+      const createdByObjectId = new mongoose.Types.ObjectId(userId);
+      
+      const defaultPermission = new ColumnPermission({
+        columnId: newColumn.id, // PostgreSQL UUID (String)
+        tableId: tableId, // PostgreSQL UUID (String)
+        databaseId: databaseObjectId, // MongoDB ObjectId
+        targetType: 'all_members',
+        name: newColumn.name,
+        canView: true, // Default: true cho column permissions
+        canEdit: true, // Default: true cho column permissions
+        createdBy: createdByObjectId, // MongoDB ObjectId
+        isDefault: true
+      });
+      await defaultPermission.save();
+      console.log('✅ Default column permission created successfully (simple):', {
+        id: defaultPermission._id,
+        name: defaultPermission.name,
+        columnId: defaultPermission.columnId,
+        targetType: defaultPermission.targetType,
+        canView: defaultPermission.canView,
+        canEdit: defaultPermission.canEdit
+      });
+    } catch (permissionError) {
+      console.error('❌ Error creating default column permission:', permissionError);
+      // Không throw error để không ảnh hưởng đến việc tạo column
+    }
+
+    // Update Metabase table structure with new column
+
+    // Add default value to existing records for the new column
+    const { Record } = await import('../models/postgres/index.js');
+    const existingRecords = await Record.findAll({
+      where: { table_id: tableId }
+    });
+
+    console.log(`📝 Adding default value to ${existingRecords.length} existing records`);
+
+    for (const record of existingRecords) {
+      const updatedData = { ...record.data };
+      
+      // Add default value for the new column if it doesn't exist
+      if (updatedData[newColumn.name] === undefined) {
+        if (defaultValue !== null && defaultValue !== undefined) {
+          updatedData[newColumn.name] = defaultValue;
+        } else {
+          // Set appropriate default based on data type
+          switch (dataType) {
+            case 'number':
+              updatedData[newColumn.name] = 0;
+              break;
+            case 'currency':
+              // Use defaultValue from currencyConfig if available
+              const currencyDefaultValue = currencyConfig?.defaultValue !== null && currencyConfig?.defaultValue !== undefined 
+                ? currencyConfig.defaultValue 
+                : 0;
+              updatedData[newColumn.name] = currencyDefaultValue;
+              break;
+            case 'percent':
+              // Use defaultValue from percentConfig if available
+              const percentDefaultValue = percentConfig?.defaultValue !== null && percentConfig?.defaultValue !== undefined 
+                ? percentConfig.defaultValue 
+                : 0;
+              updatedData[newColumn.name] = percentDefaultValue;
+              break;
+            case 'rating':
+              // Use defaultValue from ratingConfig if available
+              const ratingDefaultValue = ratingConfig?.defaultValue !== null && ratingConfig?.defaultValue !== undefined 
+                ? ratingConfig.defaultValue 
+                : 0;
+              updatedData[newColumn.name] = ratingDefaultValue;
+              break;
+            case 'checkbox':
+              // Use defaultValue from checkboxConfig if available
+              const checkboxDefaultValue = checkboxConfig?.defaultValue !== null && checkboxConfig?.defaultValue !== undefined 
+                ? checkboxConfig.defaultValue 
+                : false;
+              updatedData[newColumn.name] = checkboxDefaultValue;
+              break;
+            case 'date':
+            case 'time':
+              updatedData[newColumn.name] = null;
+              break;
+            case 'multi_select':
+            case 'linked_table':
+            case 'lookup':
+              updatedData[newColumn.name] = [];
+              break;
+            default:
+              updatedData[newColumn.name] = '';
+          }
+        }
+        
+        await record.update({ data: updatedData });
+        console.log(`✅ Added default value to record ${record.id}`);
+      }
+    }
+
+    // Recreate Metabase table with new column
+
+    try {
+      // Get database ID from table to determine schema
+      const databaseId = table.database_id;
+      
+      const metabaseResult = await createMetabaseTable(tableId, table.name, 'column-added', databaseId);
       if (metabaseResult.success) {
-        console.log(`✅ Metabase table recreated with new column: ${newColumn.name}`);
+        console.log(`✅ Metabase table updated with new column: ${newColumn.name}`);
       } else {
-        console.error('Metabase table recreation failed:', metabaseResult.error);
+        console.error('Metabase table update failed:', metabaseResult.error);
       }
     } catch (metabaseError) {
       console.error('Metabase update failed:', metabaseError);
@@ -170,10 +293,20 @@ export const getColumnsByTableIdSimple = async (req, res) => {
       return res.status(404).json({ message: 'Table not found' });
     }
 
-    const columns = await PostgresColumn.findAll({
+    const allColumns = await PostgresColumn.findAll({
       where: { table_id: tableId },
       order: [['order', 'ASC']]
     });
+
+    // Filter columns based on user permissions
+    const { getViewableColumns } = await import('../utils/columnPermissionUtils.js');
+    const viewableColumns = await getViewableColumns(userId, tableId, table.database_id, req.user);
+    
+    // Filter columns based on permissions
+    let columns = allColumns;
+    if (viewableColumns !== null) { // null means all columns are viewable
+      columns = allColumns.filter(column => viewableColumns.includes(column.id));
+    }
 
     // Transform PostgreSQL data to match frontend expected format
     const transformedColumns = columns.map(column => ({
@@ -219,6 +352,8 @@ export const getColumnsByTableIdSimple = async (req, res) => {
 
 export const updateColumnSimple = async (req, res) => {
   try {
+    console.log('🔍 updateColumnSimple called with columnId:', req.params.columnId);
+    console.log('🔍 updateColumnSimple req.body:', req.body);
     const { columnId } = req.params;
     const {
       name, dataType, isRequired, isUnique, defaultValue, order,
@@ -236,6 +371,13 @@ export const updateColumnSimple = async (req, res) => {
     const table = await PostgresTable.findByPk(column.table_id);
     if (!table) {
       return res.status(404).json({ message: 'Associated table not found' });
+    }
+
+    // Check column edit permission
+    const { canUserEditColumn } = await import('../utils/columnPermissionUtils.js');
+    const canEdit = await canUserEditColumn(userId, columnId, column.table_id, table.database_id, req.user);
+    if (!canEdit) {
+      return res.status(403).json({ message: 'You do not have permission to edit this column' });
     }
 
     // Check for duplicate name if name is being updated
@@ -305,9 +447,195 @@ export const updateColumnSimple = async (req, res) => {
       updateData.type = mapDataTypeToColumnType(dataType);
     }
 
+    // If column name was changed, update all records FIRST before changing column metadata
+    if (name && name.trim() !== column.name) {
+      const oldColumnName = column.name;
+      const newColumnName = name.trim();
+      
+      console.log(`📝 Updating records: renaming column key from "${oldColumnName}" to "${newColumnName}"`);
+      
+      // Find all records that have data for the old column name
+      const records = await PostgresRecord.findAll({
+        where: { table_id: column.table_id }
+      });
+      
+      let updatedCount = 0;
+      for (const record of records) {
+        if (record.data && record.data[oldColumnName] !== undefined) {
+          const oldValue = record.data[oldColumnName];
+          
+          // Create new data object
+          const newData = { ...record.data };
+          delete newData[oldColumnName];
+          newData[newColumnName] = oldValue;
+          
+          await record.update({ data: newData });
+          updatedCount++;
+        }
+      }
+      
+      console.log(`✅ Successfully renamed column key in ${updatedCount} records from "${oldColumnName}" to "${newColumnName}"`);
+    }
+
+    // If column data type was changed, validate and convert existing data
+    if (dataType && dataType !== column.data_type) {
+      const oldDataType = column.data_type;
+      const newDataType = dataType;
+      
+      console.log(`📝 Updating records: changing column type from "${oldDataType}" to "${newDataType}"`);
+      
+      // Find all records that have data for this column
+      const records = await PostgresRecord.findAll({
+        where: { table_id: column.table_id }
+      });
+      
+      let convertedCount = 0;
+      let invalidCount = 0;
+      
+      for (const record of records) {
+        if (record.data && record.data[column.name] !== undefined) {
+          const value = record.data[column.name];
+          
+          if (value === '' || value === null || value === undefined) {
+            // Empty values are OK
+            continue;
+          }
+          
+          let newValue = value;
+          let isValid = true;
+          
+          // Convert data based on new type
+          switch (newDataType) {
+            case 'number':
+            case 'currency':
+            case 'percent':
+            case 'rating':
+              const numValue = Number(value);
+              if (isNaN(numValue)) {
+                console.log(`   ⚠️ Invalid number value: "${value}" in record ${record.id}`);
+                invalidCount++;
+                isValid = false;
+              } else {
+                newValue = numValue;
+              }
+              break;
+              
+            case 'date':
+            case 'datetime':
+              // Try to parse date
+              const dateValue = new Date(value);
+              if (isNaN(dateValue.getTime())) {
+                console.log(`   ⚠️ Invalid date value: "${value}" in record ${record.id}`);
+                invalidCount++;
+                isValid = false;
+              } else {
+                newValue = dateValue.toISOString();
+              }
+              break;
+              
+            case 'checkbox':
+              // Convert to boolean
+              if (typeof value === 'string') {
+                newValue = value.toLowerCase() === 'true' || value === '1';
+              } else {
+                newValue = Boolean(value);
+              }
+              break;
+              
+            case 'formula':
+              // For formula columns, we need to calculate the value
+              if (formulaConfig && formulaConfig.formula) {
+                // Simple formula evaluation (you'd replace this with a proper formula engine)
+                newValue = 'Calculated Value'; // Placeholder
+              }
+              break;
+              
+            default:
+              // For text and other types, keep as string
+              newValue = String(value);
+          }
+          
+          if (isValid) {
+            const newData = { ...record.data };
+            newData[column.name] = newValue;
+            await record.update({ data: newData });
+            convertedCount++;
+          }
+        }
+      }
+      
+      console.log(`✅ Converted ${convertedCount} values to new type`);
+      if (invalidCount > 0) {
+        console.log(`   ⚠️ ${invalidCount} values could not be converted to new type`);
+      }
+    }
+
     await column.update(updateData);
 
     console.log(`✅ Column updated in PostgreSQL: ${column.name} (${column.id})`);
+
+
+    // Update Metabase table structure
+    try {
+      const { createMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      await createMetabaseTable(column.table_id, table.name, null, table.database_id);
+      console.log(`✅ Metabase table structure updated for column: ${column.name}`);
+    } catch (metabaseError) {
+      console.error('Metabase table structure update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
+
+    // If default value changed, update existing records that have empty/null values
+    if (defaultValue !== undefined && defaultValue !== column.default_value) {
+      const { Record } = await import('../models/postgres/index.js');
+      const records = await Record.findAll({
+        where: { table_id: column.table_id }
+      });
+
+      console.log(`🔄 Updating default values for ${records.length} records`);
+
+      for (const record of records) {
+        const updatedData = { ...record.data };
+        
+        // Update records that have empty, null, or 0 values for this column
+        if (updatedData[column.name] === undefined || 
+            updatedData[column.name] === null || 
+            updatedData[column.name] === '' ||
+            updatedData[column.name] === 0) {
+          
+          updatedData[column.name] = defaultValue;
+          await record.update({ data: updatedData });
+          console.log(`✅ Updated default value for record ${record.id}: ${column.name} = ${defaultValue}`);
+        }
+      }
+    }
+
+    // If percent config default value changed, update existing records
+    if (percentConfig?.defaultValue !== undefined && 
+        percentConfig?.defaultValue !== column.percent_config?.defaultValue) {
+      const { Record } = await import('../models/postgres/index.js');
+      const records = await Record.findAll({
+        where: { table_id: column.table_id }
+      });
+
+      console.log(`🔄 Updating percent default values for ${records.length} records`);
+
+      for (const record of records) {
+        const updatedData = { ...record.data };
+        
+        // Update records that have empty, null, or 0 values for this column
+        if (updatedData[column.name] === undefined || 
+            updatedData[column.name] === null || 
+            updatedData[column.name] === '' ||
+            updatedData[column.name] === 0) {
+          
+          updatedData[column.name] = percentConfig.defaultValue;
+          await record.update({ data: updatedData });
+          console.log(`✅ Updated percent default value for record ${record.id}: ${column.name} = ${percentConfig.defaultValue}`);
+        }
+      }
+
+    }
 
     res.status(200).json({
       success: true,
@@ -351,6 +679,7 @@ export const updateColumnSimple = async (req, res) => {
 
 export const deleteColumnSimple = async (req, res) => {
   try {
+    console.log('🔍 deleteColumnSimple called with columnId:', req.params.columnId);
     const { columnId } = req.params;
     const userId = req.user?._id?.toString() || '68341e4d3f86f9c7ae46e962';
 
@@ -364,13 +693,72 @@ export const deleteColumnSimple = async (req, res) => {
       return res.status(404).json({ message: 'Associated table not found' });
     }
 
+    // Check column edit permission
+    const { canUserEditColumn } = await import('../utils/columnPermissionUtils.js');
+    const canEdit = await canUserEditColumn(userId, columnId, column.table_id, table.database_id, req.user);
+    if (!canEdit) {
+      return res.status(403).json({ message: 'You do not have permission to delete this column' });
+    }
+
+    const columnName = column.name;
+    const tableId = column.table_id;
+
+    // Remove the column data from all records in this table first
+    console.log(`📝 Removing column data from all records: "${columnName}"`);
+    
+    const records = await PostgresRecord.findAll({
+      where: { table_id: tableId }
+    });
+    
+    let updatedCount = 0;
+    for (const record of records) {
+      if (record.data && record.data[columnName] !== undefined) {
+        const newData = { ...record.data };
+        delete newData[columnName];
+        
+        await record.update({ data: newData });
+        updatedCount++;
+      }
+    }
+    
+    console.log(`✅ Successfully removed column data from ${updatedCount} records`);
+
+
+    // Delete the column
+
     await column.destroy();
 
-    console.log(`✅ Column deleted from PostgreSQL: ${column.name} (${column.id})`);
+    console.log(`✅ Column deleted from PostgreSQL: ${columnName} (${column.id})`);
+
+    // Update Metabase table structure
+    try {
+      const { createMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      await createMetabaseTable(tableId, table.name, null, table.database_id);
+      console.log(`✅ Metabase table structure updated after deleting column: ${columnName}`);
+    } catch (metabaseError) {
+      console.error('Metabase table structure update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
+
+    // Recreate Metabase table without the deleted column
+    try {
+      const metabaseResult = await createMetabaseTable(column.table_id, table.name, 'column-deleted');
+      if (metabaseResult.success) {
+        console.log(`✅ Metabase table recreated without column: ${column.name}`);
+      } else {
+        console.error('Metabase table recreation failed:', metabaseResult.error);
+      }
+    } catch (metabaseError) {
+      console.error('Metabase update failed:', metabaseError);
+    }
 
     res.status(200).json({
       success: true,
-      message: 'Column deleted successfully'
+      message: 'Column deleted successfully',
+      data: {
+        deletedColumnName: column.name,
+        recordsUpdated: records.length
+      }
     });
 
   } catch (error) {

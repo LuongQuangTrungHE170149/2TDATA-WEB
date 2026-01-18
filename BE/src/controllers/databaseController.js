@@ -3,6 +3,12 @@ import User from '../model/User.js';
 import BaseMember from '../model/BaseMember.js';
 import BaseRole from '../model/BaseRole.js';
 import { isSuperAdmin, hasDatabaseAccess, getUserDatabaseRole, canManageDatabase } from '../utils/permissionUtils.js';
+import { Table as PostgresTable, Column as PostgresColumn, Record as PostgresRecord } from '../models/postgres/index.js';
+import TablePermission from '../model/TablePermission.js';
+import ColumnPermission from '../model/ColumnPermission.js';
+import RecordPermission from '../model/RecordPermission.js';
+import { createDatabaseSchema } from '../services/schemaManager.js';
+import CellPermission from '../model/CellPermission.js';
 
 // Create database
 export const createDatabase = async (req, res) => {
@@ -85,7 +91,37 @@ export const createDatabase = async (req, res) => {
 
     await BaseRole.insertMany(defaultRoles);
 
-    res.status(201).json({ success: true, data: database });
+    // Create PostgreSQL schema for this database
+    try {
+      console.log(`🏗️ Creating PostgreSQL schema for database: ${database._id}`);
+      const schemaResult = await createDatabaseSchema(database._id, currentUserId);
+      
+      if (schemaResult.success) {
+        console.log(`✅ Schema created successfully: ${schemaResult.schemaName}`);
+        
+        // Update database with schema information
+        await Database.findByIdAndUpdate(database._id, {
+          $set: {
+            postgresSchema: schemaResult.schemaName,
+            schemaCreatedAt: new Date()
+          }
+        });
+      } else {
+        console.error(`❌ Failed to create schema: ${schemaResult.error}`);
+        // Don't fail the entire operation, but log the error
+      }
+    } catch (schemaError) {
+      console.error('❌ Error creating schema:', schemaError);
+      // Don't fail the entire operation, but log the error
+    }
+
+    res.status(201).json({ 
+      success: true, 
+      data: {
+        ...database.toObject(),
+        schemaCreated: true
+      }
+    });
   } catch (error) {
     console.error('Error creating database:', error);
     res.status(500).json({ message: 'Internal server error', error: error.message });
@@ -206,7 +242,11 @@ export const updateDatabase = async (req, res) => {
 export const deleteDatabase = async (req, res) => {
   try {
     const { databaseId } = req.params;
-    const currentUserId = req.user._id;
+    const currentUserId = req.user?._id;
+    
+    if (!currentUserId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
 
     const database = await Database.findById(databaseId);
     
@@ -226,10 +266,30 @@ export const deleteDatabase = async (req, res) => {
       }
     }
 
-    // Delete all related BaseMember entries
+    // Delete all related data in cascade order
+    
+    // 1. Delete all records first (to avoid foreign key constraints)
+    const tables = await PostgresTable.findAll({ where: { database_id: databaseId } });
+    for (const table of tables) {
+      // Delete all records in this table
+      await PostgresRecord.destroy({ where: { table_id: table.id } });
+      // Delete all columns in this table
+      await PostgresColumn.destroy({ where: { table_id: table.id } });
+    }
+    
+    // 2. Delete all tables
+    await PostgresTable.destroy({ where: { database_id: databaseId } });
+    
+    // 3. Delete all permissions related to this database
+    await TablePermission.deleteMany({ 'databaseId._id': databaseId });
+    await ColumnPermission.deleteMany({ 'databaseId._id': databaseId });
+    await RecordPermission.deleteMany({ 'databaseId._id': databaseId });
+    await CellPermission.deleteMany({ 'databaseId._id': databaseId });
+    
+    // 4. Delete all related BaseMember entries
     await BaseMember.deleteMany({ databaseId: databaseId });
     
-    // Delete the database
+    // 5. Finally delete the database
     await Database.findByIdAndDelete(databaseId);
     
     res.status(200).json({ success: true, message: 'Database deleted successfully' });
@@ -379,6 +439,246 @@ export const updateUserRole = async (req, res) => {
     });
   }
 };
+// Copy database
+export const copyDatabase = async (req, res) => {
+  try {
+    const { databaseId } = req.params;
+    const { name, description } = req.body;
+    const currentUserId = req.user?._id;
+    const siteId = req.siteId || '68cbdf9729510ea44d90a8e9'; // Default site ID for testing
+
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ message: 'Database name is required' });
+    }
+
+    // Find the original database
+    const originalDatabase = await Database.findById(databaseId);
+    if (!originalDatabase) {
+      return res.status(404).json({ message: 'Original database not found' });
+    }
+
+    // Check if user has permission to copy database
+    if (!isSuperAdmin(req.user)) {
+      const userMember = await BaseMember.findOne({
+        databaseId: databaseId,
+        userId: currentUserId
+      });
+
+      if (!userMember || !['owner', 'manager'].includes(userMember.role)) {
+        return res.status(403).json({ 
+          message: 'Only owners and managers can copy database' 
+        });
+      }
+    }
+
+    // Find organization where current user is a member
+    const Organization = (await import('../model/Organization.js')).default;
+    let organization = null;
+    let orgId = null;
+
+    // For super admin, allow creating database without organization
+    if (isSuperAdmin(req.user)) {
+      // Super admin can create database with siteId as orgId
+      orgId = siteId;
+    } else {
+      // Regular users must be in an organization to create database
+      organization = await Organization.findOne({ 
+        site_id: siteId,
+        'members.user': currentUserId 
+      });
+      
+      if (!organization) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Organization not found for this user' 
+        });
+      }
+      orgId = organization._id;
+    }
+
+    // Create new database
+    const newDatabase = new Database({
+      name: name.trim(),
+      description: description || originalDatabase.description,
+      orgId: orgId,
+      ownerId: currentUserId
+    });
+
+    await newDatabase.save();
+
+    // Create BaseMember entry for the owner
+    const baseMember = new BaseMember({
+      databaseId: newDatabase._id,
+      userId: currentUserId,
+      role: 'owner'
+    });
+
+    await baseMember.save();
+
+    // Create default roles for the new database
+    const defaultRoles = [
+      {
+        databaseId: newDatabase._id,
+        name: 'Manager',
+        builtin: true,
+        permissions: {
+          canManageMembers: true,
+          canManageTables: true,
+          canManageViews: true,
+          canExportData: true,
+          canImportData: true
+        }
+      },
+      {
+        databaseId: newDatabase._id,
+        name: 'Member',
+        builtin: true,
+        permissions: {
+          canViewData: true,
+          canEditData: true,
+          canCreateRecords: true,
+          canUpdateRecords: true,
+          canDeleteRecords: false
+        }
+      }
+    ];
+
+    await BaseRole.insertMany(defaultRoles);
+
+    // Copy all tables from original database (both MongoDB and PostgreSQL)
+    const Table = (await import('../model/Table.js')).default;
+    const Column = (await import('../model/Column.js')).default;
+    const Record = (await import('../model/Record.js')).default;
+    
+    // Get tables from both MongoDB and PostgreSQL
+    const [mongoTables, postgresTables] = await Promise.all([
+      Table.find({ databaseId: databaseId }),
+      PostgresTable.findAll({
+        where: { database_id: databaseId }
+      })
+    ]);
+    
+    console.log('🔍 MongoDB tables found:', mongoTables.length);
+    console.log('🔍 PostgreSQL tables found:', postgresTables.length);
+    console.log('🔍 DatabaseId:', databaseId);
+    
+    const originalTables = mongoTables.length > 0 ? mongoTables : postgresTables;
+
+    for (const originalTable of originalTables) {
+      console.log('🔍 Copying table:', originalTable.name);
+      
+      // Create new table in PostgreSQL (not MongoDB)
+      const newTable = await PostgresTable.create({
+        name: originalTable.name,
+        description: originalTable.description,
+        database_id: newDatabase._id.toString(),
+        user_id: currentUserId.toString(),
+        site_id: originalTable.siteId || originalTable.site_id,
+        table_access_rule: originalTable.tableAccessRule || originalTable.table_access_rule,
+        column_access_rules: originalTable.columnAccessRules || originalTable.column_access_rules,
+        record_access_rules: originalTable.recordAccessRules || originalTable.record_access_rules,
+        cell_access_rules: originalTable.cellAccessRules || originalTable.cell_access_rules
+      });
+
+      console.log('🔍 Created new table in PostgreSQL:', newTable.id, newTable.name);
+
+      // Copy columns - handle both MongoDB and PostgreSQL sources
+      let originalColumns = [];
+      
+      if (mongoTables.length > 0) {
+        // Copy from MongoDB
+        originalColumns = await Column.find({ tableId: originalTable._id }).sort({ order: 1 });
+      } else {
+        // Copy from PostgreSQL
+        const postgresColumns = await PostgresColumn.findAll({
+          where: { table_id: originalTable.id },
+          order: [['order', 'ASC']]
+        });
+        
+        // Transform PostgreSQL columns to MongoDB format
+        originalColumns = postgresColumns.map(col => ({
+          name: col.name,
+          key: col.key,
+          type: col.type,
+          dataType: col.data_type,
+          isRequired: col.is_required,
+          isUnique: col.is_unique,
+          defaultValue: col.default_value,
+          order: col.order,
+          siteId: col.site_id
+        }));
+      }
+
+      for (const originalColumn of originalColumns) {
+        // Create new column in PostgreSQL
+        await PostgresColumn.create({
+          name: originalColumn.name,
+          key: originalColumn.key,
+          type: originalColumn.type,
+          data_type: originalColumn.dataType,
+          is_required: originalColumn.isRequired,
+          is_unique: originalColumn.isUnique,
+          default_value: originalColumn.defaultValue,
+          order: originalColumn.order,
+          table_id: newTable.id,
+          user_id: currentUserId.toString(),
+          site_id: originalColumn.siteId
+        });
+      }
+
+      // Copy records - handle both MongoDB and PostgreSQL sources
+      let originalRecords = [];
+      
+      if (mongoTables.length > 0) {
+        // Copy from MongoDB
+        originalRecords = await Record.find({ tableId: originalTable._id });
+      } else {
+        // Copy from PostgreSQL
+        const postgresRecords = await PostgresRecord.findAll({
+          where: { table_id: originalTable.id }
+        });
+        
+        // Transform PostgreSQL records to MongoDB format
+        originalRecords = postgresRecords.map(rec => ({
+          data: rec.data,
+          siteId: rec.site_id
+        }));
+      }
+
+      for (const originalRecord of originalRecords) {
+        // Create new record in PostgreSQL
+        await PostgresRecord.create({
+          data: originalRecord.data,
+          table_id: newTable.id,
+          user_id: currentUserId.toString(),
+          site_id: originalRecord.siteId
+        });
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Database copied successfully',
+      data: {
+        database: {
+          _id: newDatabase._id,
+          name: newDatabase.name,
+          description: newDatabase.description,
+          orgId: newDatabase.orgId,
+          ownerId: newDatabase.ownerId,
+          createdAt: newDatabase.createdAt,
+          updatedAt: newDatabase.updatedAt
+        },
+        tablesCount: originalTables.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Error copying database:', error);
+    res.status(500).json({ message: 'Internal server error', error: error.message });
+  }
+};
+
 // Remove member from database
 export const removeDatabaseMember = async (req, res) => {
   try {

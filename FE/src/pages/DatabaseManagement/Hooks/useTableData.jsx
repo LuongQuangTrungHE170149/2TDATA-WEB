@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { toast } from 'react-toastify';
 import axiosInstance from '../../../utils/axiosInstance-cookie-only';
+import { isSuperAdmin, getUserDatabaseRole } from '../Utils/permissionUtils.jsx';
 
 /**
  * Custom hook for managing table data fetching and mutations
@@ -16,6 +17,16 @@ import axiosInstance from '../../../utils/axiosInstance-cookie-only';
  */
 export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilterActive, context, modalCallbacks) => {
   const queryClient = useQueryClient();
+
+  // Force refetch when component mounts to ensure fresh data
+  useEffect(() => {
+    if (tableId) {
+      queryClient.invalidateQueries(['tableStructure', tableId]);
+      queryClient.invalidateQueries({ queryKey: ['tableRecords', tableId], exact: false });
+      queryClient.refetchQueries(['tableStructure', tableId]);
+      queryClient.refetchQueries({ queryKey: ['tableRecords', tableId], exact: false });
+    }
+  }, [tableId, queryClient]);
   const { 
     selectedRowKeys, 
     setSelectedRowKeys, 
@@ -23,6 +34,77 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     setSelectAll, 
     setAllRecords 
   } = context;
+
+  // Fetch table permissions - KEEP ENABLED (only disable column/record/cell permissions)
+  const { data: tablePermissionsResponse, isLoading: tablePermissionsLoading } = useQuery({
+    queryKey: ['table-permissions', tableId],
+    queryFn: async () => {
+      const response = await axiosInstance.get(`/permissions/tables/${tableId}/permissions`);
+      return response.data;
+    },
+    enabled: !!tableId, // Keep enabled for table permissions
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+
+  // Extract table permissions for current user
+  const tablePermissions = tablePermissionsResponse?.data || [];
+
+  // Fetch conditional formatting rules
+  const { data: formattingRulesResponse, isLoading: formattingRulesLoading } = useQuery({
+    queryKey: ['conditional-formatting-rules', tableId],
+    queryFn: async () => {
+      const response = await axiosInstance.get(`/conditional-formatting/tables/${tableId}/rules`);
+      return response.data;
+    },
+    enabled: !!tableId,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+
+  // Extract formatting rules
+  const formattingRules = formattingRulesResponse?.data || [];
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  
+  // Helper function to check table permission
+  const checkTablePermission = (permission, userRole = null) => {
+    if (!currentUser._id) return false;
+    
+    // Super admin có tất cả quyền
+    if (isSuperAdmin(currentUser)) {
+      return true;
+    }
+    
+    // Check if user is owner (only owner has all permissions by default)
+    if (userRole === 'owner') {
+      console.log('✅ User is owner, bypassing permission check for:', permission);
+      return true;
+    }
+    
+    // Check specific user permissions first
+    const specificUserPermission = tablePermissions.find(p => 
+      p.targetType === 'specific_user' && 
+      p.userId?._id === currentUser._id && 
+      p.permissions?.[permission] === true
+    );
+    if (specificUserPermission) return true;
+    
+    // Check specific role permissions
+    const specificRolePermission = tablePermissions.find(p => 
+      p.targetType === 'specific_role' && 
+      p.role === 'member' && // Assuming current user is member
+      p.permissions?.[permission] === true
+    );
+    if (specificRolePermission) return true;
+    
+    // Check all members permissions
+    const allMembersPermission = tablePermissions.find(p => 
+      p.targetType === 'all_members' && 
+      p.permissions?.[permission] === true
+    );
+    if (allMembersPermission) return true;
+    
+    return false;
+  };
+
 
   // Fetch group preferences from backend
   const { data: groupPreferenceResponse } = useQuery({
@@ -86,6 +168,9 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
       return response.data;
     },
     enabled: !!tableId,
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
+    staleTime: 0
   });
 
   // Fetch table records
@@ -94,6 +179,10 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     queryFn: async () => {
       const sortRulesParam = sortRules.length > 0 ? JSON.stringify(sortRules) : undefined;
       const filterRulesParam = isFilterActive && filterRules.length > 0 ? JSON.stringify(filterRules) : undefined;
+      
+      console.log('🔄 Frontend: Fetching records with sortRules:', sortRules);
+      console.log('🔄 Frontend: sortRulesParam:', sortRulesParam);
+      
       const response = await axiosInstance.get(`/database/tables/${tableId}/records`, {
         params: {
           sortRules: sortRulesParam,
@@ -105,6 +194,9 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
       return response.data;
     },
     enabled: !!tableId,
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
+    staleTime: 0,
   });
 
   // Add column mutation
@@ -120,6 +212,7 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     onSuccess: () => {
       toast.success('Thêm cột thành công');
       queryClient.invalidateQueries(['tableStructure', tableId]);
+      queryClient.invalidateQueries(['records', tableId]);
       
       // Close modal and reset form
       if (modalCallbacks?.onAddColumnSuccess) {
@@ -235,6 +328,7 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     onSuccess: () => {
       toast.success('Cập nhật cột thành công');
       queryClient.invalidateQueries(['tableStructure', tableId]);
+      queryClient.invalidateQueries(['records', tableId]);
       
       // Close modal and reset form
       if (modalCallbacks?.onEditColumnSuccess) {
@@ -256,6 +350,7 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     onSuccess: () => {
       toast.success('Xóa cột thành công');
       queryClient.invalidateQueries(['tableStructure', tableId]);
+      queryClient.invalidateQueries(['records', tableId]);
     },
     onError: (error) => {
       console.error('Error deleting column:', error);
@@ -263,21 +358,14 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     },
   });
 
-  // Fetch column permissions
+  // Fetch column permissions - TEMPORARILY DISABLED FOR TESTING
   const { data: columnPermissionsResponse, error: columnPermissionsError, isLoading: columnPermissionsLoading } = useQuery({
     queryKey: ['columnPermissions', tableId],
     queryFn: async () => {
-      // console.log(`🔍 Fetching column permissions for tableId: ${tableId}`);
-      try {
-        const response = await axiosInstance.get(`/permissions/tables/${tableId}/columns/permissions`);
-        // console.log(`🔍 Column permissions response:`, response.data);
-        return response.data;
-      } catch (error) {
-        console.error(`🔍 Column permissions API error:`, error);
-        throw error;
-      }
+      // Return empty permissions for testing
+      return { data: [] };
     },
-    enabled: !!tableId,
+    enabled: false, // Disabled for testing
   });
 
   // Debug column permissions query
@@ -292,24 +380,24 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     }
   }, [tableId, columnPermissionsLoading, columnPermissionsError, columnPermissionsResponse]);
 
-  // Fetch record permissions
+  // Fetch record permissions - TEMPORARILY DISABLED FOR TESTING
   const { data: recordPermissionsResponse } = useQuery({
     queryKey: ['recordPermissions', tableId],
     queryFn: async () => {
-      const response = await axiosInstance.get(`/permissions/tables/${tableId}/records/permissions`);
-      return response.data;
+      // Return empty permissions for testing
+      return { data: [] };
     },
-    enabled: !!tableId,
+    enabled: false, // Disabled for testing
   });
 
-  // Fetch cell permissions
+  // Fetch cell permissions - TEMPORARILY DISABLED FOR TESTING
   const { data: cellPermissionsResponse } = useQuery({
     queryKey: ['cellPermissions', tableId],
     queryFn: async () => {
-      const response = await axiosInstance.get(`/permissions/tables/${tableId}/cells/permissions`);
-      return response.data;
+      // Return empty permissions for testing
+      return { data: [] };
     },
-    enabled: !!tableId,
+    enabled: false, // Disabled for testing
   });
 
   // Fetch database members for user role
@@ -337,6 +425,17 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     retry: 1,
     retryDelay: 1000,
   });
+
+  // Calculate user role after databaseMembersResponse is available
+  const userRole = getUserDatabaseRole(databaseMembersResponse?.data || [], currentUser);
+  
+  // Permission checks - TABLE PERMISSIONS ENABLED (only disable column/record/cell permissions)
+  const canViewTable = checkTablePermission('canView', userRole);
+  const canEditStructure = checkTablePermission('canEditStructure', userRole);
+  const canEditData = checkTablePermission('canEditData', userRole);
+  const canAddData = checkTablePermission('canAddData', userRole);
+  const canAddView = checkTablePermission('canAddView', userRole);
+  const canEditView = checkTablePermission('canEditView', userRole);
 
   // Debug database members query
   useEffect(() => {
@@ -377,6 +476,7 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     recordPermissionsResponse,
     cellPermissionsResponse,
     databaseMembersResponse,
+    tablePermissionsResponse,
     isLoading,
     error,
     
@@ -391,6 +491,19 @@ export const useTableData = (tableId, databaseId, sortRules, filterRules, isFilt
     deleteAllRecordsMutation,
     updateColumnMutation,
     deleteColumnMutation,
+    
+    // Permission checks
+    canViewTable,
+    canEditStructure,
+    canEditData,
+    canAddData,
+    canAddView,
+    canEditView,
+    tablePermissionsLoading,
+    
+    // Conditional formatting
+    formattingRules,
+    formattingRulesLoading,
     
     // Query client for manual invalidation
     queryClient

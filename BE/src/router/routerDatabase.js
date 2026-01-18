@@ -5,10 +5,12 @@ import {
   getDatabaseById,
   updateDatabase,
   deleteDatabase,
+  copyDatabase,
   getDatabaseMembers,
   updateUserRole,
   removeDatabaseMember
 } from "../controllers/databaseController.js";
+import { checkTablePermission } from "../middlewares/checkTablePermission.js";
 
 
 import {
@@ -18,7 +20,7 @@ import {
   updateTable,
   deleteTable,
   copyTable
-} from "../controllers/tableController.js";
+} from "../controllers/tableControllerPostgres.js";
 
 import {
   createColumn,
@@ -28,9 +30,12 @@ import {
   deleteColumn,
   getLinkedTableData,
   getLookupData,
-  reorderColumns,
+  reorderColumns
+} from "../controllers/columnControllerPostgres.js";
+
+import {
   createColumnAtPosition
-} from "../controllers/columnController.js";
+} from "../controllers/columnControllerPostgres.js";
 
 import {
   createRecord,
@@ -41,7 +46,7 @@ import {
   deleteMultipleRecords,
   deleteAllRecords,
   getTableStructure
-} from "../controllers/recordController.js";
+} from "../controllers/recordControllerPostgres.js";
 
 import {
   getCommentsByRecord,
@@ -183,7 +188,7 @@ router.get("/databases/:databaseId/roles", async (req, res, next) => {
 });
 router.put("/databases/:databaseId", updateDatabase);
 router.delete("/databases/:databaseId", deleteDatabase);
-// router.post("/databases/:databaseId/copy", copyDatabase); // Function not implemented yet
+router.post("/databases/:databaseId/copy", requireAuthWithCookie, copyDatabase);
 
 // Table routes
 
@@ -214,7 +219,7 @@ router.post("/records", createRecord);
 router.get("/tables/:tableId/records", getRecords);
 
 // Bulk delete routes - MUST come before :recordId routes
-router.delete("/records/bulk", deleteMultipleRecords);
+router.delete("/records/bulk", authAndSiteDetectionMiddleware, deleteMultipleRecords);
 router.delete("/tables/:tableId/records/all", deleteAllRecords);
 
 // Individual record routes - MUST come after bulk routes
@@ -251,12 +256,12 @@ router.post("/tables/:tableId/field-preference", saveFieldPreference);
 router.delete("/tables/:tableId/field-preference", deleteFieldPreference);
 
 // View routes
-router.post("/views", createViewValidation, createView);
+router.post("/views", createViewValidation, checkTablePermission('canAddView'), createView);
 router.get("/tables/:tableId/views", getViews);
 router.get("/views/:viewId", getViewById);
-router.put("/views/:viewId", updateViewValidation, updateView);
-router.delete("/views/:viewId", deleteView);
-router.post("/views/:viewId/copy", copyViewValidation, copyView);
+router.put("/views/:viewId", updateViewValidation, checkTablePermission('canEditView'), updateView);
+router.delete("/views/:viewId", checkTablePermission('canEditView'), deleteView);
+router.post("/views/:viewId/copy", copyViewValidation, checkTablePermission('canAddView'), copyView);
 
 // Kanban routes
 router.get("/tables/:tableId/kanban", getKanbanData);

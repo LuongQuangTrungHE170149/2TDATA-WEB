@@ -4,6 +4,9 @@ import Table from './Table.js';
 import Column from './Column.js';
 import Record from './Record.js';
 import Row from './Row.js';
+import { TableTemplate, TemplateTable, TemplateColumn } from '../../model/TableTemplate.js';
+import TemplateRecord from '../../model/TemplateRecord.js';
+import ConditionalFormattingRule from './ConditionalFormattingRule.js';
 
 // Define associations
 Table.hasMany(Column, { foreignKey: 'table_id', as: 'columns' });
@@ -14,6 +17,13 @@ Record.belongsTo(Table, { foreignKey: 'table_id', as: 'table' });
 
 Table.hasMany(Row, { foreignKey: 'table_id', as: 'rows' });
 Row.belongsTo(Table, { foreignKey: 'table_id', as: 'table' });
+
+// Template associations are defined in TableTemplate.js
+Table.hasMany(ConditionalFormattingRule, { foreignKey: 'table_id', as: 'formattingRules' });
+ConditionalFormattingRule.belongsTo(Table, { foreignKey: 'table_id', as: 'table' });
+
+Column.hasMany(ConditionalFormattingRule, { foreignKey: 'column_id', as: 'formattingRules' });
+ConditionalFormattingRule.belongsTo(Column, { foreignKey: 'column_id', as: 'column' });
 
 // Sync models with database
 const syncModels = async (force = false) => {
@@ -32,6 +42,11 @@ export {
   Column,
   Record,
   Row,
+  TableTemplate,
+  TemplateTable,
+  TemplateColumn,
+  TemplateRecord,
+  ConditionalFormattingRule,
   syncModels
 };
 
@@ -41,5 +56,10 @@ export default {
   Column,
   Record,
   Row,
+  TableTemplate,
+  TemplateTable,
+  TemplateColumn,
+  TemplateRecord,
+  ConditionalFormattingRule,
   syncModels
 };

@@ -368,6 +368,16 @@ export const createColumn = async (req, res) => {
       // Không throw error để không ảnh hưởng đến việc tạo column
     }
 
+    // Update Metabase table structure with new column
+    try {
+      const { createMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      await createMetabaseTable(column.table_id, table.name, null, databaseId);
+      console.log(`✅ Metabase table structure updated with new column: ${column.name}`);
+    } catch (metabaseError) {
+      console.error('Metabase table structure update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
+
     // Transform PostgreSQL column to match expected format
     const transformedColumn = {
       _id: column.id,
@@ -816,6 +826,16 @@ export const updateColumn = async (req, res) => {
     // Save the column
     await column.save();
 
+    // Update Metabase table structure
+    try {
+      const { createMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      await createMetabaseTable(column.tableId, null, null, column.tableId);
+      console.log(`✅ Metabase table structure updated for column: ${column.name}`);
+    } catch (metabaseError) {
+      console.error('Metabase table structure update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
+
     res.status(200).json({
       success: true,
       message: 'Column updated successfully',
@@ -881,17 +901,17 @@ export const getLinkedTableData = async (req, res) => {
     // Get total count for pagination
     const totalCount = await Record.countDocuments(query);
 
-    // console.log('🔍 Backend: Query and Records:', {
-    //   query: query,
-    //   recordsCount: records.length,
-    //   totalCount: totalCount,
-    //   firstRecord: records[0] ? {
-    //     _id: records[0]._id,
-    //     tableId: records[0].tableId,
-    //     data: records[0].data,
-    //     dataKeys: Object.keys(records[0].data || {})
-    //   } : null
-    // });
+    console.log('🔍 Backend: Query and Records:', {
+      query: query,
+      recordsCount: records.length,
+      totalCount: totalCount,
+      firstRecord: records[0] ? {
+        _id: records[0]._id,
+        tableId: records[0].tableId,
+        data: records[0].data,
+        dataKeys: Object.keys(records[0].data || {})
+      } : null
+    });
 
     // Get linked table info
     const linkedTable = await Table.findOne({ _id: linkedTableId });
@@ -942,20 +962,20 @@ export const getLinkedTableData = async (req, res) => {
       };
     });
 
-    // console.log('🔍 Backend: All records data:', records.map(record => ({
-    //   _id: record._id,
-    //   tableId: record.tableId,
-    //   data: record.data,
-    //   dataKeys: Object.keys(record.data || {}),
-    //   dataEntries: Object.entries(record.data || {}).map(([key, val]) => ({ key, value: val }))
-    // })));
+    console.log('🔍 Backend: All records data:', records.map(record => ({
+      _id: record._id,
+      tableId: record.tableId,
+      data: record.data,
+      dataKeys: Object.keys(record.data || {}),
+      dataEntries: Object.entries(record.data || {}).map(([key, val]) => ({ key, value: val }))
+    })));
 
-    // console.log('🔍 Backend: Transformed options:', options.map(option => ({
-    //   value: option.value,
-    //   label: option.label,
-    //   data: option.data,
-    //   dataKeys: Object.keys(option.data || {})
-    // })));
+    console.log('🔍 Backend: Transformed options:', options.map(option => ({
+      value: option.value,
+      label: option.label,
+      data: option.data,
+      dataKeys: Object.keys(option.data || {})
+    })));
 
     res.status(200).json({
       success: true,
@@ -1011,6 +1031,16 @@ export const deleteColumn = async (req, res) => {
 
     // Then delete column metadata
     await Column.deleteOne({ _id: columnId });
+
+    // Update Metabase table structure
+    try {
+      const { createMetabaseTable } = await import('../utils/metabaseTableCreator.js');
+      await createMetabaseTable(tableId, null, null, tableId);
+      console.log(`✅ Metabase table structure updated after deleting column: ${columnName}`);
+    } catch (metabaseError) {
+      console.error('Metabase table structure update failed:', metabaseError);
+      // Don't fail the entire operation if metabase fails
+    }
 
     // console.log(`Successfully deleted column "${columnName}" and removed data from all records`);
 
@@ -1187,9 +1217,21 @@ export const createColumnAtPosition = async (req, res) => {
     }
 
     // Verify table exists and belongs to user
-    const table = await Table.findOne({
+    // Try to find table by _id first, if fails try by other fields
+    let table = await Table.findOne({
       _id: tableId
     }).populate('databaseId');
+    
+    // If not found by _id, try to find by other possible fields
+    if (!table) {
+      // Check if tableId might be a different field
+      table = await Table.findOne({
+        $or: [
+          { name: tableId },
+          { _id: tableId }
+        ]
+      }).populate('databaseId');
+    }
 
     if (!table) {
       return res.status(404).json({ message: 'Table not found' });
